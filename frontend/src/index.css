@@ -1,0 +1,184 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-vault-dark-3;
+  }
+
+  body {
+    @apply bg-vault-black text-dark-100 font-sans antialiased;
+    background-image: 
+      radial-gradient(ellipse at top, rgba(220, 38, 38, 0.05) 0%, transparent 50%),
+      repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(220, 38, 38, 0.02) 2px, rgba(220, 38, 38, 0.02) 4px);
+    background-attachment: fixed;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Orbitron', system-ui, sans-serif;
+    font-weight: 700;
+  }
+
+  /* Reduced base font sizes */
+  html {
+    font-size: 12px;
+  }
+
+  @media (min-width: 1024px) {
+    html {
+      font-size: 13px;
+    }
+  }
+
+  code, pre {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #dc2626 #000000;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    @apply bg-vault-black;
+    border-left: 1px solid rgba(220, 38, 38, 0.1);
+  }
+
+  *::-webkit-scrollbar-thumb {
+    @apply bg-primary-600;
+    border: 2px solid #000000;
+    border-radius: 5px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    @apply bg-primary-500;
+    box-shadow: 0 0 10px rgba(220, 38, 38, 0.5);
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-3 py-1.5 text-xs font-semibold text-white bg-gradient-to-b from-primary-600 to-primary-700
+           rounded-md border border-primary-500 shadow-vault-button
+           hover:from-primary-500 hover:to-primary-600 hover:shadow-vault-button-hover
+           active:scale-[0.98] transition-all duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-vault-button
+           relative overflow-hidden;
+  }
+
+  .btn-primary::before {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent;
+    transform: translateX(-100%);
+    transition: transform 0.6s;
+  }
+
+  .btn-primary:hover::before {
+    transform: translateX(100%);
+  }
+
+  .btn-secondary {
+    @apply px-3 py-1.5 text-xs font-semibold text-dark-100 bg-vault-dark-4 rounded-md
+           border border-dark-600 shadow-vault-inner
+           hover:bg-vault-dark-3 hover:border-dark-500 hover:shadow-vault-outer
+           active:scale-[0.98] transition-all duration-200;
+  }
+
+  .card {
+    @apply bg-gradient-to-br from-vault-dark-2 to-vault-dark-3 rounded-lg
+           border border-dark-700 shadow-vault-card
+           hover:border-primary-600/30 hover:shadow-vault-card hover:shadow-red-glow
+           transition-all duration-300 relative overflow-hidden;
+  }
+
+  .card::before {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-br from-primary-600/0 via-primary-600/0 to-primary-600/5;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .card:hover::before {
+    opacity: 1;
+  }
+
+  .card-glow {
+    @apply card;
+  }
+
+  .card-glow:hover {
+    @apply shadow-red-glow-lg;
+  }
+
+  .input-field {
+    @apply px-2.5 py-1.5 bg-vault-dark-3 border border-dark-600 rounded-md
+           text-dark-100 placeholder-dark-500 font-mono text-xs
+           focus:ring-2 focus:ring-primary-600/50 focus:border-primary-600
+           focus:bg-vault-dark-2 focus:shadow-red-glow
+           transition-all duration-200;
+  }
+
+  .vault-panel {
+    @apply bg-gradient-to-br from-vault-dark-1 via-vault-dark-2 to-vault-dark-1
+           border border-dark-700 rounded-lg shadow-vault-outer
+           relative overflow-hidden;
+  }
+
+  .vault-panel::after {
+    content: '';
+    @apply absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary-600/50 to-transparent;
+  }
+
+  .vault-badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold
+           bg-vault-dark-4 border border-dark-600 text-dark-200
+           shadow-vault-inner;
+  }
+
+  .vault-text-glow {
+    text-shadow: 0 0 10px rgba(220, 38, 38, 0.5),
+                 0 0 20px rgba(220, 38, 38, 0.3),
+                 0 0 30px rgba(220, 38, 38, 0.1);
+  }
+
+  .vault-divider {
+    @apply border-t border-dark-700 relative;
+  }
+
+  .vault-divider::before {
+    content: '';
+    @apply absolute top-0 left-1/2 transform -translate-x-1/2 w-24 h-px bg-gradient-to-r from-transparent via-primary-600/50 to-transparent;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@layer utilities {
+  .text-gradient-red {
+    @apply bg-gradient-to-r from-primary-400 via-primary-500 to-primary-600 bg-clip-text text-transparent;
+  }
+
+  .bg-vault-mesh {
+    background-image: 
+      linear-gradient(rgba(220, 38, 38, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(220, 38, 38, 0.03) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+}
