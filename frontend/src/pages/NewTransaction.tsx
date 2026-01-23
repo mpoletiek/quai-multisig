@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMultisig } from '../hooks/useMultisig';
 import { transactionBuilderService } from '../services/TransactionBuilderService';
+import { multisigService } from '../services/MultisigService';
 import { Modal } from '../components/Modal';
 import { TransactionFlow } from '../components/TransactionFlow';
 import * as quais from 'quais';
@@ -9,7 +10,7 @@ import * as quais from 'quais';
 export function NewTransaction() {
   const { address: walletAddress } = useParams<{ address: string }>();
   const navigate = useNavigate();
-  const { proposeTransactionAsync } = useMultisig(walletAddress);
+  const { proposeTransactionAsync, executeToWhitelistAsync, executeBelowLimitAsync } = useMultisig(walletAddress);
 
   const [to, setTo] = useState('');
   const [value, setValue] = useState('');
@@ -17,8 +18,100 @@ export function NewTransaction() {
   const [errors, setErrors] = useState<string[]>([]);
   const [showFlow, setShowFlow] = useState(false);
   const [resetKey, setResetKey] = useState(0);
+  const [isWhitelisted, setIsWhitelisted] = useState<boolean | null>(null);
+  const [whitelistLimit, setWhitelistLimit] = useState<bigint | null>(null);
+  const [canUseDailyLimit, setCanUseDailyLimit] = useState<boolean | null>(null);
+  const [remainingDailyLimit, setRemainingDailyLimit] = useState<bigint | null>(null);
+  const [dailyLimitInfo, setDailyLimitInfo] = useState<{ limit: bigint; spent: bigint } | null>(null);
 
-  const validateForm = (): boolean => {
+  // Check whitelist status when address or value changes
+  useEffect(() => {
+    const checkWhitelist = async () => {
+      if (!walletAddress || !to.trim() || !quais.isAddress(to)) {
+        setIsWhitelisted(null);
+        setWhitelistLimit(null);
+        return;
+      }
+
+      try {
+        const parsedValue = transactionBuilderService.parseValue(value || '0');
+        const canExecute = await multisigService.canExecuteViaWhitelist(
+          walletAddress,
+          to.trim(),
+          parsedValue
+        );
+
+        if (canExecute.canExecute) {
+          setIsWhitelisted(true);
+          const limit = await multisigService.getWhitelistLimit(walletAddress, to.trim());
+          setWhitelistLimit(limit);
+        } else {
+          setIsWhitelisted(false);
+          setWhitelistLimit(null);
+        }
+      } catch (error) {
+        setIsWhitelisted(false);
+        setWhitelistLimit(null);
+      }
+    };
+
+    // Debounce the check
+    const timeoutId = setTimeout(checkWhitelist, 500);
+    return () => clearTimeout(timeoutId);
+  }, [walletAddress, to, value]);
+
+  // Check daily limit status when value changes (only for simple transfers, not contract calls)
+  useEffect(() => {
+    const checkDailyLimit = async () => {
+      if (!walletAddress || (data && data !== '0x')) {
+        setCanUseDailyLimit(null);
+        setRemainingDailyLimit(null);
+        setDailyLimitInfo(null);
+        return;
+      }
+
+      try {
+        // Get daily limit info
+        const dailyLimit = await multisigService.getDailyLimit(walletAddress);
+        if (dailyLimit.limit === 0n) {
+          // No daily limit set
+          setCanUseDailyLimit(null);
+          setRemainingDailyLimit(null);
+          setDailyLimitInfo(null);
+          return;
+        }
+
+        setDailyLimitInfo({ limit: dailyLimit.limit, spent: dailyLimit.spent });
+        
+        // Get remaining limit (handles 24-hour reset automatically)
+        const remaining = await multisigService.getRemainingLimit(walletAddress);
+        setRemainingDailyLimit(remaining);
+
+        // Check if we can execute via daily limit
+        if (value.trim()) {
+          const parsedValue = transactionBuilderService.parseValue(value || '0');
+          const canExecute = await multisigService.canExecuteViaDailyLimit(
+            walletAddress,
+            parsedValue
+          );
+          setCanUseDailyLimit(canExecute.canExecute);
+        } else {
+          setCanUseDailyLimit(null);
+        }
+      } catch (error) {
+        // Module might not be enabled or other error - don't enforce limit
+        setCanUseDailyLimit(null);
+        setRemainingDailyLimit(null);
+        setDailyLimitInfo(null);
+      }
+    };
+
+    // Debounce the check
+    const timeoutId = setTimeout(checkDailyLimit, 500);
+    return () => clearTimeout(timeoutId);
+  }, [walletAddress, value, data]);
+
+  const validateForm = async (): Promise<boolean> => {
     const newErrors: string[] = [];
 
     if (!to.trim()) {
@@ -35,6 +128,38 @@ export function NewTransaction() {
         if (parsedValue < 0n) {
           newErrors.push('Value cannot be negative');
         }
+        // Check whitelist limit if applicable
+        if (isWhitelisted && whitelistLimit !== null && whitelistLimit > 0n && parsedValue > whitelistLimit) {
+          const formattedLimit = transactionBuilderService.formatValue(whitelistLimit);
+          newErrors.push(`Value exceeds whitelist limit of ${formattedLimit} QUAI`);
+        }
+        
+        // Check daily limit for simple transfers (not contract calls)
+        // Note: This is frontend-only enforcement and can be bypassed
+        if (walletAddress && (!data || data === '0x')) {
+          try {
+            // Fetch daily limit info if not already available
+            let limitInfo = dailyLimitInfo;
+            let remaining = remainingDailyLimit;
+            
+            if (!limitInfo || remaining === null) {
+              const dailyLimit = await multisigService.getDailyLimit(walletAddress);
+              if (dailyLimit.limit > 0n) {
+                limitInfo = { limit: dailyLimit.limit, spent: dailyLimit.spent };
+                remaining = await multisigService.getRemainingLimit(walletAddress);
+              }
+            }
+            
+            if (limitInfo && limitInfo.limit > 0n && remaining !== null && parsedValue > remaining) {
+              const formattedLimit = transactionBuilderService.formatValue(limitInfo.limit);
+              const formattedRemaining = transactionBuilderService.formatValue(remaining);
+              newErrors.push(`Transaction exceeds daily limit. Daily limit: ${formattedLimit} QUAI, Remaining: ${formattedRemaining} QUAI. Note: This limit is only enforced in this frontend and can be bypassed by interacting with the contract directly.`);
+            }
+          } catch (error) {
+            // If we can't check daily limit (e.g., module not enabled), don't block the transaction
+            console.warn('Could not check daily limit:', error);
+          }
+        }
       } catch {
         newErrors.push('Invalid value format');
       }
@@ -50,7 +175,7 @@ export function NewTransaction() {
     return newErrors.length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!walletAddress) {
@@ -58,7 +183,8 @@ export function NewTransaction() {
       return;
     }
 
-    if (!validateForm()) {
+    const isValid = await validateForm();
+    if (!isValid) {
       return;
     }
 
@@ -77,21 +203,77 @@ export function NewTransaction() {
     const normalizedTo = to.trim();
     const normalizedData = (data || '0x').trim();
 
-    onProgress({ step: 'signing', message: 'Please approve the transaction proposal in your wallet' });
-    
-    const txHash = await proposeTransactionAsync({
+    // Priority: Whitelist > Daily Limit > Normal Proposal
+    // Check if we can execute via whitelist first
+    const canExecuteWhitelist = await multisigService.canExecuteViaWhitelist(
       walletAddress,
-      to: normalizedTo,
-      value: parsedValue,
-      data: normalizedData,
-    });
-    
-    onProgress({ step: 'waiting', txHash: txHash || '', message: 'Waiting for transaction confirmation...' });
+      normalizedTo,
+      parsedValue
+    );
+
+    if (canExecuteWhitelist.canExecute) {
+      // Execute directly via whitelist (no approvals needed)
+      onProgress({ step: 'signing', message: 'Please approve the transaction execution in your wallet (whitelisted address - no approvals needed)' });
+      
+      const txHash = await executeToWhitelistAsync({
+        walletAddress,
+        to: normalizedTo,
+        value: parsedValue,
+        data: normalizedData,
+      });
+      
+      onProgress({ step: 'waiting', txHash: txHash || '', message: 'Executing transaction via whitelist...' });
+    } else if (!normalizedData || normalizedData === '0x') {
+      // Check daily limit only for simple transfers (no contract calls)
+      const canExecuteDailyLimit = await multisigService.canExecuteViaDailyLimit(
+        walletAddress,
+        parsedValue
+      );
+
+      if (canExecuteDailyLimit.canExecute) {
+        // Execute directly via daily limit (no approvals needed)
+        // Note: Daily limit is ONLY enforced in the frontend
+        onProgress({ step: 'signing', message: 'Please approve the transaction execution in your wallet (within daily limit - no approvals needed)' });
+        
+        const txHash = await executeBelowLimitAsync({
+          walletAddress,
+          to: normalizedTo,
+          value: parsedValue,
+          data: normalizedData,
+        });
+        
+        onProgress({ step: 'waiting', txHash: txHash || '', message: 'Executing transaction via daily limit...' });
+      } else {
+        // Normal proposal flow (requires approvals)
+        onProgress({ step: 'signing', message: 'Please approve the transaction proposal in your wallet' });
+        
+        const txHash = await proposeTransactionAsync({
+          walletAddress,
+          to: normalizedTo,
+          value: parsedValue,
+          data: normalizedData,
+        });
+        
+        onProgress({ step: 'waiting', txHash: txHash || '', message: 'Waiting for transaction confirmation...' });
+      }
+    } else {
+      // Normal proposal flow for contract calls (requires approvals)
+      onProgress({ step: 'signing', message: 'Please approve the transaction proposal in your wallet' });
+      
+      const txHash = await proposeTransactionAsync({
+        walletAddress,
+        to: normalizedTo,
+        value: parsedValue,
+        data: normalizedData,
+      });
+      
+      onProgress({ step: 'waiting', txHash: txHash || '', message: 'Waiting for transaction confirmation...' });
+    }
     
     // Wait for transaction to be mined
     await new Promise(resolve => setTimeout(resolve, 3000));
     
-    return txHash || '';
+    return '';
   };
 
   const handleComplete = () => {
@@ -135,7 +317,30 @@ export function NewTransaction() {
           Back to Vault
         </button>
         <h1 className="text-4xl font-display font-bold text-gradient-red vault-text-glow">New Transaction</h1>
-        <p className="text-lg font-mono text-dark-500 uppercase tracking-wider mt-2">Propose a new multisig transaction</p>
+        <p className="text-lg font-mono text-dark-500 uppercase tracking-wider mt-2">
+          {isWhitelisted === true 
+            ? 'Execute transaction to whitelisted address (no approvals needed)' 
+            : canUseDailyLimit === true && (!data || data === '0x')
+            ? 'Execute transaction within daily limit (no approvals needed)'
+            : 'Propose a new multisig transaction'}
+        </p>
+        
+        {/* Daily Limit Warning */}
+        {canUseDailyLimit === true && (!data || data === '0x') && (
+          <div className="mt-4 bg-gradient-to-r from-yellow-900/90 via-yellow-800/90 to-yellow-900/90 border-l-4 border-yellow-600 rounded-md p-4">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <div>
+                <h4 className="text-base font-semibold text-yellow-200 mb-1">Daily Limit Enforcement Notice</h4>
+                <p className="text-sm text-yellow-200/90">
+                  The daily limit is <strong>ONLY enforced in this frontend</strong>. Transactions can bypass this limitation by interacting with the multisig wallet contract directly. This is a convenience feature, not a security mechanism.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="vault-panel p-8">
@@ -210,6 +415,46 @@ export function NewTransaction() {
               <span className="text-base font-mono text-dark-500 uppercase tracking-wider">Amount:</span>
               <span className="text-dark-200 font-semibold">{value || '0'} <span className="text-primary-400">QUAI</span></span>
             </div>
+            {isWhitelisted === true && (
+              <div className="flex justify-between items-center pt-2 border-t border-dark-600">
+                <span className="text-base font-mono text-dark-500 uppercase tracking-wider">Status:</span>
+                <span className="text-primary-400 font-semibold inline-flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  Whitelisted {whitelistLimit !== null && whitelistLimit > 0n && `(Limit: ${transactionBuilderService.formatValue(whitelistLimit)} QUAI)`}
+                </span>
+              </div>
+            )}
+            {dailyLimitInfo && dailyLimitInfo.limit > 0n && !isWhitelisted && (!data || data === '0x') && (
+              <div className="flex justify-between items-center pt-2 border-t border-dark-600">
+                <span className="text-base font-mono text-dark-500 uppercase tracking-wider">Daily Limit:</span>
+                <span className={`font-semibold inline-flex items-center gap-2 ${
+                  value.trim() && remainingDailyLimit !== null && transactionBuilderService.parseValue(value || '0') > remainingDailyLimit
+                    ? 'text-primary-400'
+                    : canUseDailyLimit === true
+                    ? 'text-yellow-400'
+                    : 'text-dark-400'
+                }`}>
+                  {remainingDailyLimit !== null ? (
+                    <>
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        {value.trim() && transactionBuilderService.parseValue(value || '0') > remainingDailyLimit ? (
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                        ) : (
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                        )}
+                      </svg>
+                      {value.trim() && transactionBuilderService.parseValue(value || '0') > remainingDailyLimit
+                        ? `Exceeds limit (Remaining: ${transactionBuilderService.formatValue(remainingDailyLimit)} QUAI)`
+                        : `Remaining: ${transactionBuilderService.formatValue(remainingDailyLimit)} QUAI`}
+                    </>
+                  ) : (
+                    'Loading...'
+                  )}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -241,7 +486,11 @@ export function NewTransaction() {
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
-                Propose Transaction
+                {isWhitelisted === true 
+                  ? 'Execute Transaction' 
+                  : canUseDailyLimit === true && (!data || data === '0x')
+                  ? 'Execute Transaction (Daily Limit)'
+                  : 'Propose Transaction'}
               </span>
             </button>
             <button
@@ -259,7 +508,13 @@ export function NewTransaction() {
       <Modal
         isOpen={showFlow}
         onClose={handleCancel}
-        title="Propose Transaction"
+        title={
+          isWhitelisted === true 
+            ? "Execute Transaction" 
+            : canUseDailyLimit === true && (!data || data === '0x')
+            ? "Execute Transaction (Daily Limit)"
+            : "Propose Transaction"
+        }
         size="lg"
       >
         <div className="space-y-4">
@@ -283,6 +538,42 @@ export function NewTransaction() {
                 <span className="text-base font-mono text-dark-500 uppercase tracking-wider">Amount:</span>
                 <span className="text-dark-200 font-semibold">{value || '0'} <span className="text-primary-400">QUAI</span></span>
               </div>
+              {isWhitelisted === true && (
+                <div className="flex justify-between items-center pt-2 border-t border-dark-600">
+                  <span className="text-base font-mono text-dark-500 uppercase tracking-wider">Status:</span>
+                  <span className="text-primary-400 font-semibold inline-flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    Whitelisted - Executes immediately (no approvals needed)
+                  </span>
+                </div>
+              )}
+              {canUseDailyLimit === true && !isWhitelisted && (!data || data === '0x') && (
+                <div className="flex justify-between items-center pt-2 border-t border-dark-600">
+                  <span className="text-base font-mono text-dark-500 uppercase tracking-wider">Status:</span>
+                  <span className="text-yellow-400 font-semibold inline-flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                    </svg>
+                    Within Daily Limit - Executes immediately (no approvals needed)
+                  </span>
+                </div>
+              )}
+              {canUseDailyLimit === true && !isWhitelisted && (!data || data === '0x') && (
+                <div className="pt-2 border-t border-dark-600">
+                  <div className="bg-gradient-to-r from-yellow-900/90 via-yellow-800/90 to-yellow-900/90 border-l-4 border-yellow-600 rounded-md p-3">
+                    <div className="flex items-start gap-2">
+                      <svg className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <p className="text-xs text-yellow-200/90">
+                        <strong>Note:</strong> Daily limit is ONLY enforced in this frontend. This can be bypassed by interacting with the contract directly.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
               {data && data !== '0x' && (
                 <div className="flex justify-between items-start">
                   <span className="text-base font-mono text-dark-500 uppercase tracking-wider">Data:</span>
@@ -295,12 +586,30 @@ export function NewTransaction() {
           </div>
 
           <TransactionFlow
-            title="Propose Transaction"
-            description={`Proposing transaction to ${to.substring(0, 10)}...`}
+            title={
+              isWhitelisted === true 
+                ? "Execute Transaction" 
+                : canUseDailyLimit === true && (!data || data === '0x')
+                ? "Execute Transaction (Daily Limit)"
+                : "Propose Transaction"
+            }
+            description={
+              isWhitelisted === true 
+                ? `Executing transaction to whitelisted address ${to.substring(0, 10)}... (no approvals needed)`
+                : canUseDailyLimit === true && (!data || data === '0x')
+                ? `Executing transaction within daily limit ${to.substring(0, 10)}... (no approvals needed)`
+                : `Proposing transaction to ${to.substring(0, 10)}...`
+            }
             onExecute={handleProposeTransaction}
             onComplete={handleComplete}
             onCancel={handleCancel}
-            successMessage="Transaction proposed successfully!"
+            successMessage={
+              isWhitelisted === true 
+                ? "Transaction executed successfully!" 
+                : canUseDailyLimit === true && (!data || data === '0x')
+                ? "Transaction executed successfully!"
+                : "Transaction proposed successfully!"
+            }
             resetKey={resetKey}
           />
         </div>

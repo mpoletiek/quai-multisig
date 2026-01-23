@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useWalletStore } from '../store/walletStore';
 import { multisigService } from '../services/MultisigService';
 import { notificationManager } from '../components/NotificationContainer';
+import { CONTRACT_ADDRESSES } from '../config/contracts';
 import type { DeploymentConfig, TransactionData, PendingTransaction } from '../types';
 import * as quais from 'quais';
 
@@ -29,6 +30,16 @@ const notifiedApprovals = new Map<string, Set<string>>(); // walletAddress -> Se
 // Global tracking of notified wallet changes (owners, threshold)
 const lastNotifiedOwners = new Map<string, string>(); // walletAddress -> owners array (as JSON string)
 const lastNotifiedThresholds = new Map<string, number>(); // walletAddress -> threshold
+
+// Global tracking of notified module status changes
+const lastNotifiedModuleStatus = new Map<string, Record<string, boolean>>(); // walletAddress -> { moduleAddress: enabled }
+
+// Module address to name mapping
+const MODULE_NAMES: Record<string, string> = {
+  [CONTRACT_ADDRESSES.SOCIAL_RECOVERY_MODULE]: 'Social Recovery',
+  [CONTRACT_ADDRESSES.DAILY_LIMIT_MODULE]: 'Daily Limit',
+  [CONTRACT_ADDRESSES.WHITELIST_MODULE]: 'Whitelist',
+};
 
 /**
  * Hook to detect if the page is visible (not hidden/minimized)
@@ -203,6 +214,82 @@ export function useMultisig(walletAddress?: string) {
       });
     }
   }, [walletInfo, walletAddress]);
+
+  // Query module statuses to track changes
+  const {
+    data: moduleStatuses,
+  } = useQuery({
+    queryKey: ['moduleStatus', walletAddress],
+    queryFn: async () => {
+      if (!walletAddress) return null;
+      const statuses: Record<string, boolean> = {};
+      const moduleAddresses = [
+        CONTRACT_ADDRESSES.SOCIAL_RECOVERY_MODULE,
+        CONTRACT_ADDRESSES.DAILY_LIMIT_MODULE,
+        CONTRACT_ADDRESSES.WHITELIST_MODULE,
+      ];
+      
+      for (const moduleAddress of moduleAddresses) {
+        if (moduleAddress) {
+          try {
+            statuses[moduleAddress] = await multisigService.isModuleEnabled(walletAddress, moduleAddress);
+          } catch (error) {
+            console.error(`Failed to check status for module ${moduleAddress}:`, error);
+            statuses[moduleAddress] = false;
+          }
+        }
+      }
+      return statuses;
+    },
+    enabled: !!walletAddress && isPageVisible,
+    refetchInterval: isPageVisible ? POLLING_INTERVALS.WALLET_INFO : false,
+  });
+
+  // Track module status changes for notifications
+  useEffect(() => {
+    if (!moduleStatuses || !walletAddress) return;
+
+    const prevStatuses = lastNotifiedModuleStatus.get(walletAddress) || {};
+    const currentStatuses = moduleStatuses;
+
+    // Check each module for status changes
+    for (const [moduleAddress, isEnabled] of Object.entries(currentStatuses)) {
+      const prevEnabled = prevStatuses[moduleAddress];
+      const moduleName = MODULE_NAMES[moduleAddress] || 'Unknown Module';
+
+      // Only notify if status actually changed (not on first load)
+      if (prevEnabled !== undefined && prevEnabled !== isEnabled) {
+        if (isEnabled) {
+          notificationManager.add({
+            message: `✅ ${moduleName} module enabled`,
+            type: 'success',
+          });
+
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification(`${moduleName} Module Enabled`, {
+              body: `The ${moduleName} module has been enabled for this vault`,
+              icon: '/vite.svg',
+            });
+          }
+        } else {
+          notificationManager.add({
+            message: `✅ ${moduleName} module disabled`,
+            type: 'success',
+          });
+
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification(`${moduleName} Module Disabled`, {
+              body: `The ${moduleName} module has been disabled for this vault`,
+              icon: '/vite.svg',
+            });
+          }
+        }
+      }
+    }
+
+    // Update last notified status
+    lastNotifiedModuleStatus.set(walletAddress, { ...currentStatuses });
+  }, [moduleStatuses, walletAddress]);
 
   // Get pending transactions
   const {
@@ -587,23 +674,87 @@ export function useMultisig(walletAddress?: string) {
     },
   });
 
-  // Enable module mutation
+  // Enable module mutation (proposes transaction)
   const enableModule = useMutation({
     mutationFn: async ({ walletAddress, moduleAddress }: { walletAddress: string; moduleAddress: string }) => {
       return await multisigService.enableModule(walletAddress, moduleAddress);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
+      queryClient.invalidateQueries({ queryKey: ['moduleStatus'] });
     },
     onError: (error) => {
       setError(error instanceof Error ? error.message : 'Failed to enable module');
     },
   });
 
-  // Disable module mutation
+  // Disable module mutation (proposes transaction)
   const disableModule = useMutation({
     mutationFn: async ({ walletAddress, moduleAddress }: { walletAddress: string; moduleAddress: string }) => {
       return await multisigService.disableModule(walletAddress, moduleAddress);
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
+      queryClient.invalidateQueries({ queryKey: ['moduleStatus'] });
+    },
     onError: (error) => {
       setError(error instanceof Error ? error.message : 'Failed to disable module');
+    },
+  });
+
+  // Execute transaction via whitelist (bypasses approval requirement)
+  const executeToWhitelist = useMutation({
+    mutationFn: async (tx: TransactionData & { walletAddress: string }) => {
+      return await multisigService.executeToWhitelist(
+        tx.walletAddress,
+        tx.to,
+        tx.value,
+        tx.data
+      );
+    },
+    onSuccess: (txHash) => {
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
+      queryClient.invalidateQueries({ queryKey: ['walletInfo'] });
+      notificationManager.add({
+        message: `✅ Transaction executed via whitelist! Hash: ${txHash?.slice(0, 10)}...${txHash?.slice(-6)}`,
+        type: 'success',
+      });
+    },
+    onError: (error) => {
+      setError(error instanceof Error ? error.message : 'Failed to execute transaction via whitelist');
+      notificationManager.add({
+        message: `Failed to execute via whitelist: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        type: 'error',
+      });
+    },
+  });
+
+  // Execute transaction via daily limit (bypasses approval requirement)
+  // Note: This is ONLY enforced in the frontend. Users can bypass this by interacting with the multisig directly.
+  const executeBelowLimit = useMutation({
+    mutationFn: async (tx: TransactionData & { walletAddress: string }) => {
+      return await multisigService.executeBelowLimit(
+        tx.walletAddress,
+        tx.to,
+        tx.value
+      );
+    },
+    onSuccess: (txHash) => {
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
+      queryClient.invalidateQueries({ queryKey: ['walletInfo'] });
+      queryClient.invalidateQueries({ queryKey: ['dailyLimit'] });
+      queryClient.invalidateQueries({ queryKey: ['remainingLimit'] });
+      notificationManager.add({
+        message: `✅ Transaction executed via daily limit! Hash: ${txHash?.slice(0, 10)}...${txHash?.slice(-6)}`,
+        type: 'success',
+      });
+    },
+    onError: (error) => {
+      setError(error instanceof Error ? error.message : 'Failed to execute transaction via daily limit');
+      notificationManager.add({
+        message: `Failed to execute via daily limit: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        type: 'error',
+      });
     },
   });
 
@@ -660,6 +811,10 @@ export function useMultisig(walletAddress?: string) {
     enableModuleAsync: enableModule.mutateAsync,
     disableModule: disableModule.mutate,
     disableModuleAsync: disableModule.mutateAsync,
+    executeToWhitelist: executeToWhitelist.mutate,
+    executeToWhitelistAsync: executeToWhitelist.mutateAsync,
+    executeBelowLimit: executeBelowLimit.mutate,
+    executeBelowLimitAsync: executeBelowLimit.mutateAsync,
 
     // Mutation states
     isDeploying: deployWallet.isPending,
@@ -671,6 +826,8 @@ export function useMultisig(walletAddress?: string) {
     isAddingOwner: addOwner.isPending,
     isRemovingOwner: removeOwner.isPending,
     isChangingThreshold: changeThreshold.isPending,
+    isExecutingViaWhitelist: executeToWhitelist.isPending,
+    isExecutingViaDailyLimit: executeBelowLimit.isPending,
 
     // Utilities
     refresh,

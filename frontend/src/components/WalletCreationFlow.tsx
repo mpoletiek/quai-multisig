@@ -152,11 +152,11 @@ export function WalletCreationFlow({
                 </li>
                 <li className="flex items-start gap-4">
                   <span className="text-primary-500 mt-1">•</span>
-                  <span><strong className="text-dark-200">First transaction:</strong> Deploy the proxy contract</span>
+                  <span><strong className="text-dark-200">First transaction:</strong> Deploy the Multisig Vault</span>
                 </li>
                 <li className="flex items-start gap-4">
                   <span className="text-primary-500 mt-1">•</span>
-                  <span><strong className="text-dark-200">Second transaction:</strong> Register the wallet with the factory</span>
+                  <span><strong className="text-dark-200">Second transaction:</strong> Register the Vault</span>
                 </li>
                 <li className="flex items-start gap-4">
                   <span className="text-primary-500 mt-1">•</span>
@@ -198,7 +198,7 @@ export function WalletCreationFlow({
       {progress.step !== 'preparing' && progress.step !== 'error' && (
         <div className="vault-panel p-8">
           <div className="space-y-8">
-            {/* Step 1: Deploy Proxy */}
+            {/* Step 1: Deploy Multisig Vault */}
             <div className="flex gap-6">
               <div className="flex-shrink-0">
                 <div
@@ -215,7 +215,7 @@ export function WalletCreationFlow({
               </div>
               <div className="flex-1">
                 <h3 className="text-lg font-display font-bold text-dark-200 mb-2">
-                  Step 1: Deploy Proxy Contract
+                  Step 1: Deploy Multisig Vault
                 </h3>
                 <p className="text-lg text-dark-400 mb-3">
                   {isStepActive('deploying')
@@ -223,8 +223,8 @@ export function WalletCreationFlow({
                     : isStepActive('deploying_waiting')
                     ? 'Transaction submitted. Waiting for confirmation...'
                     : isStepComplete('deploying')
-                    ? 'Proxy contract deployed successfully'
-                    : 'Deploying the multisig wallet proxy contract'}
+                    ? 'Multisig Vault deployed successfully'
+                    : 'Deploying your Multisig Vault'}
                 </p>
                 {progress.deployTxHash && (
                   <div className="mt-3 bg-vault-dark-4 rounded-md p-4 border border-dark-600">
@@ -272,7 +272,7 @@ export function WalletCreationFlow({
               </div>
               <div className="flex-1">
                 <h3 className="text-lg font-display font-bold text-dark-200 mb-2">
-                  Step 2: Register Wallet
+                  Step 2: Register Vault
                 </h3>
                 <p className="text-lg text-dark-400 mb-3">
                   {isStepActive('registering')
@@ -280,8 +280,8 @@ export function WalletCreationFlow({
                     : isStepActive('registering_waiting')
                     ? 'Transaction submitted. Waiting for confirmation...'
                     : isStepComplete('registering')
-                    ? 'Wallet registered successfully'
-                    : 'Registering the wallet with the factory for discovery'}
+                    ? 'Vault registered successfully'
+                    : 'Registering your Vault'}
                 </p>
                 {progress.registerTxHash && (
                   <div className="mt-3 bg-vault-dark-4 rounded-md p-4 border border-dark-600">

@@ -32,6 +32,9 @@ contract SocialRecoveryModule {
     // Wallet => RecoveryHash => Guardian => Approved
     mapping(address => mapping(bytes32 => mapping(address => bool))) public recoveryApprovals;
 
+    // Wallet => Nonce (incremented for each recovery initiation)
+    mapping(address => uint256) public recoveryNonces;
+
     // Events
     event RecoverySetup(
         address indexed wallet,
@@ -125,8 +128,13 @@ contract SocialRecoveryModule {
             "Invalid threshold"
         );
 
-        bytes32 recoveryHash = getRecoveryHash(wallet, newOwners, newThreshold);
+        // Increment nonce to ensure unique recovery hash
+        recoveryNonces[wallet]++;
+        uint256 nonce = recoveryNonces[wallet];
 
+        bytes32 recoveryHash = getRecoveryHash(wallet, newOwners, newThreshold, nonce);
+
+        // Check if recovery with this hash already exists (shouldn't happen with nonce, but safety check)
         require(
             recoveries[wallet][recoveryHash].executionTime == 0,
             "Recovery already initiated"
@@ -259,9 +267,25 @@ contract SocialRecoveryModule {
     function getRecoveryHash(
         address wallet,
         address[] memory newOwners,
-        uint256 newThreshold
+        uint256 newThreshold,
+        uint256 nonce
     ) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(wallet, newOwners, newThreshold));
+        return keccak256(abi.encodePacked(wallet, newOwners, newThreshold, nonce));
+    }
+
+    /**
+     * @notice Get recovery hash for current nonce (for frontend convenience)
+     * @param wallet Wallet address
+     * @param newOwners New owners
+     * @param newThreshold New threshold
+     * @return Recovery hash with current nonce
+     */
+    function getRecoveryHashForCurrentNonce(
+        address wallet,
+        address[] memory newOwners,
+        uint256 newThreshold
+    ) public view returns (bytes32) {
+        return getRecoveryHash(wallet, newOwners, newThreshold, recoveryNonces[wallet] + 1);
     }
 
     /**

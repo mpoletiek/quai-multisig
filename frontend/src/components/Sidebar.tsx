@@ -9,11 +9,11 @@ export function Sidebar() {
   const location = useLocation();
 
   return (
-    <aside className="fixed left-0 top-[5.5rem] h-[calc(100vh-5.5rem)] w-64 bg-vault-dark-2 border-r-2 border-dark-700 flex flex-col z-20 overflow-hidden">
+    <aside className="fixed left-0 top-[7rem] h-[calc(100vh-7rem)] w-64 bg-vault-dark-2 border-r-2 border-dark-700 flex flex-col z-20 overflow-hidden">
 
       {/* Quick Actions */}
       {connected && (
-        <div className="px-4 py-4 border-b border-dark-700">
+        <div className="px-4 py-5 border-b border-dark-700">
           <Link
             to="/create"
             className={`flex items-center gap-4.5 px-4 py-2.5 rounded text-base font-semibold transition-all w-full ${

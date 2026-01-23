@@ -4,6 +4,7 @@ import { useMultisig } from '../hooks/useMultisig';
 import { useWallet } from '../hooks/useWallet';
 import { TransactionList } from '../components/TransactionList';
 import { OwnerManagement } from '../components/OwnerManagement';
+import { ModuleManagement } from '../components/ModuleManagement';
 import { getBlockRangeTimePeriod } from '../utils/blockTime';
 import * as quais from 'quais';
 
@@ -237,6 +238,14 @@ export function WalletDetail() {
           </div>
         )}
       </div>
+
+      {/* Module Management */}
+      {isOwner && (
+        <ModuleManagement
+          walletAddress={walletAddress}
+          onUpdate={refresh}
+        />
+      )}
 
       {/* Pending Transactions - Compact */}
       <div className="vault-panel p-4">

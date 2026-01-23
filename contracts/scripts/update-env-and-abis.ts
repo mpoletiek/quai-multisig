@@ -74,6 +74,33 @@ async function main() {
   );
   console.log("✅ Copied ProxyFactory.json");
 
+  // Copy SocialRecoveryModule ABI
+  const socialRecoveryArtifact = path.join(artifactsDir, "modules", "SocialRecoveryModule.sol", "SocialRecoveryModule.json");
+  const socialRecoveryAbi = JSON.parse(fs.readFileSync(socialRecoveryArtifact, "utf-8"));
+  fs.writeFileSync(
+    path.join(frontendAbiDir, "SocialRecoveryModule.json"),
+    JSON.stringify({ abi: socialRecoveryAbi.abi }, null, 2)
+  );
+  console.log("✅ Copied SocialRecoveryModule.json");
+
+  // Copy DailyLimitModule ABI
+  const dailyLimitArtifact = path.join(artifactsDir, "modules", "DailyLimitModule.sol", "DailyLimitModule.json");
+  const dailyLimitAbi = JSON.parse(fs.readFileSync(dailyLimitArtifact, "utf-8"));
+  fs.writeFileSync(
+    path.join(frontendAbiDir, "DailyLimitModule.json"),
+    JSON.stringify({ abi: dailyLimitAbi.abi }, null, 2)
+  );
+  console.log("✅ Copied DailyLimitModule.json");
+
+  // Copy WhitelistModule ABI
+  const whitelistArtifact = path.join(artifactsDir, "modules", "WhitelistModule.sol", "WhitelistModule.json");
+  const whitelistAbi = JSON.parse(fs.readFileSync(whitelistArtifact, "utf-8"));
+  fs.writeFileSync(
+    path.join(frontendAbiDir, "WhitelistModule.json"),
+    JSON.stringify({ abi: whitelistAbi.abi }, null, 2)
+  );
+  console.log("✅ Copied WhitelistModule.json");
+
   console.log("\n✅ All updates complete!");
   console.log("\nContract Addresses:");
   console.log("-------------------");

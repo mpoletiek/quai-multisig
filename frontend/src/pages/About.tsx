@@ -214,7 +214,7 @@ export function About() {
               Upgradeable Design
             </h3>
             <p className="text-base text-dark-400 leading-relaxed">
-              Built with upgradeable proxy pattern, ready for future enhancements and multi-shard support.
+              Built with an upgradeable architecture, ready for future enhancements and multi-shard support.
             </p>
           </div>
 

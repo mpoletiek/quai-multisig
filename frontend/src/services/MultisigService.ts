@@ -8,11 +8,15 @@ import type {
 } from '../types';
 import { CONTRACT_ADDRESSES, NETWORK_CONFIG } from '../config/contracts';
 import { extractIpfsHashFromBytecode } from '../utils/ipfsHelper';
+import { transactionBuilderService } from './TransactionBuilderService';
 
 // Import ABIs
 import MultisigWalletABI from '../config/abi/MultisigWallet.json';
 import ProxyFactoryABI from '../config/abi/ProxyFactory.json';
 import MultisigWalletProxyABI from '../config/abi/MultisigWalletProxy.json';
+import WhitelistModuleABI from '../config/abi/WhitelistModule.json';
+import DailyLimitModuleABI from '../config/abi/DailyLimitModule.json';
+import SocialRecoveryModuleABI from '../config/abi/SocialRecoveryModule.json';
 
 export class MultisigService {
   private provider: Provider;
@@ -2378,28 +2382,78 @@ export class MultisigService {
 
   /**
    * Enable a module
+   * Note: enableModule has onlySelf modifier, so we need to propose a transaction
+   * that calls enableModule on the wallet itself
+   * @returns Transaction hash of the proposed transaction
    */
-  async enableModule(walletAddress: string, moduleAddress: string): Promise<void> {
+  async enableModule(walletAddress: string, moduleAddress: string): Promise<string> {
     if (!this.signer) {
       throw new Error('Signer not set. Connect wallet first.');
     }
 
-    const wallet = this.getWalletContract(walletAddress, this.signer);
-    const tx = await wallet.enableModule(moduleAddress);
-    await tx.wait();
+    // Validate address format
+    if (!quais.isAddress(moduleAddress)) {
+      throw new Error(`Invalid module address format: ${moduleAddress}`);
+    }
+
+    const normalizedModule = quais.getAddress(moduleAddress);
+
+    // Check if module is already enabled
+    const wallet = this.getWalletContract(walletAddress);
+    const isEnabled = await wallet.modules(normalizedModule);
+    if (isEnabled) {
+      throw new Error('Module is already enabled');
+    }
+
+    // enableModule has onlySelf modifier, so we need to propose a transaction
+    // that calls the wallet's enableModule function
+    const walletWithSigner = this.getWalletContract(walletAddress, this.signer);
+    const iface = walletWithSigner.interface;
+    
+    // Encode the enableModule function call
+    const data = iface.encodeFunctionData('enableModule', [normalizedModule]);
+    
+    // Propose transaction to the wallet itself (self-call)
+    const txHash = await this.proposeTransaction(walletAddress, walletAddress, 0n, data);
+    return txHash;
   }
 
   /**
    * Disable a module
+   * Note: disableModule has onlySelf modifier, so we need to propose a transaction
+   * that calls disableModule on the wallet itself
+   * @returns Transaction hash of the proposed transaction
    */
-  async disableModule(walletAddress: string, moduleAddress: string): Promise<void> {
+  async disableModule(walletAddress: string, moduleAddress: string): Promise<string> {
     if (!this.signer) {
       throw new Error('Signer not set. Connect wallet first.');
     }
 
-    const wallet = this.getWalletContract(walletAddress, this.signer);
-    const tx = await wallet.disableModule(moduleAddress);
-    await tx.wait();
+    // Validate address format
+    if (!quais.isAddress(moduleAddress)) {
+      throw new Error(`Invalid module address format: ${moduleAddress}`);
+    }
+
+    const normalizedModule = quais.getAddress(moduleAddress);
+
+    // Check if module is enabled
+    const wallet = this.getWalletContract(walletAddress);
+    const isEnabled = await wallet.modules(normalizedModule);
+    if (!isEnabled) {
+      throw new Error('Module is not enabled');
+    }
+
+    // disableModule has onlySelf modifier, so we need to propose a transaction
+    // that calls the wallet's disableModule function
+    const walletWithSigner = this.getWalletContract(walletAddress, this.signer);
+    const iface = walletWithSigner.interface;
+    
+    // Encode the disableModule function call
+    const data = iface.encodeFunctionData('disableModule', [normalizedModule]);
+    
+    // Propose transaction to the wallet itself (self-call)
+    const txHash = await this.proposeTransaction(walletAddress, walletAddress, 0n, data);
+    return txHash;
   }
 
   /**
@@ -2411,6 +2465,729 @@ export class MultisigService {
   }
 
   /**
+   * Get whitelist module contract instance
+   */
+  private getWhitelistModuleContract(signerOrProvider?: Signer | Provider): Contract {
+    // WhitelistModuleABI is already an array, not an object with .abi property
+    const abi = Array.isArray(WhitelistModuleABI) ? WhitelistModuleABI : (WhitelistModuleABI as any).abi;
+    return new quais.Contract(
+      CONTRACT_ADDRESSES.WHITELIST_MODULE,
+      abi,
+      signerOrProvider || this.provider
+    ) as Contract;
+  }
+
+  /**
+   * Add address to whitelist
+   * Note: This is a direct call (not a multisig transaction) since the module handles owner checks
+   */
+  async addToWhitelist(
+    walletAddress: string,
+    address: string,
+    limit: bigint
+  ): Promise<void> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    // Validate address format
+    if (!quais.isAddress(address)) {
+      throw new Error(`Invalid address format: ${address}`);
+    }
+
+    const normalizedAddress = quais.getAddress(address);
+    const whitelistModule = this.getWhitelistModuleContract(this.signer);
+    
+    // Estimate gas and add buffer to prevent "out of gas" errors
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await whitelistModule.addToWhitelist.estimateGas(walletAddress, normalizedAddress, limit);
+      console.log('  Gas estimation for addToWhitelist succeeded:', estimatedGas.toString());
+    } catch (error: any) {
+      // If gas estimation fails, decode error for better message
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot add to whitelist: ${errorMessage}`);
+    }
+
+    // Prepare transaction options with gas limit
+    const txOptions: any = {};
+    if (estimatedGas) {
+      // Add 100% buffer to estimated gas (doubled) to handle external calls to multisig wallet
+      // The addToWhitelist function makes external calls (isOwner, modules) which can vary in gas cost
+      txOptions.gasLimit = estimatedGas * 2n;
+      // Ensure minimum of 400k gas even if estimation is low
+      if (txOptions.gasLimit < 400000n) {
+        txOptions.gasLimit = 400000n;
+      }
+      // Cap at 1M gas to prevent excessive limits
+      if (txOptions.gasLimit > 1000000n) {
+        txOptions.gasLimit = 1000000n;
+      }
+      console.log('  Using estimated gas with 100% buffer for addToWhitelist:', {
+        estimated: estimatedGas.toString(),
+        limit: txOptions.gasLimit.toString(),
+      });
+    } else {
+      // Fallback to generous default (increased to 500k)
+      txOptions.gasLimit = 500000n;
+      console.warn('  Gas estimation failed for addToWhitelist, using default:', txOptions.gasLimit.toString());
+    }
+    
+    let tx;
+    try {
+      tx = await whitelistModule.addToWhitelist(walletAddress, normalizedAddress, limit, txOptions);
+    } catch (error: any) {
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+
+    // Log actual gas used for debugging
+    if (receipt.gasUsed) {
+      console.log('  Actual gas used for addToWhitelist:', receipt.gasUsed.toString());
+      if (txOptions.gasLimit && receipt.gasUsed > txOptions.gasLimit * 95n / 100n) {
+        console.warn('  Warning: Gas usage was very close to limit!', {
+          used: receipt.gasUsed.toString(),
+          limit: txOptions.gasLimit.toString(),
+        });
+      }
+    }
+
+    // Check if transaction reverted
+    if (receipt.status === 0) {
+      const gasInfo = receipt.gasUsed ? ` Gas used: ${receipt.gasUsed.toString()}, Gas limit: ${txOptions.gasLimit?.toString() || 'unknown'}` : '';
+      throw new Error(`Transaction execution reverted. Possible causes: address already whitelisted, module not enabled, or insufficient gas.${gasInfo}`);
+    }
+  }
+
+  /**
+   * Remove address from whitelist
+   * Note: This is a direct call (not a multisig transaction) since the module handles owner checks
+   */
+  async removeFromWhitelist(walletAddress: string, address: string): Promise<void> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    // Validate address format
+    if (!quais.isAddress(address)) {
+      throw new Error(`Invalid address format: ${address}`);
+    }
+
+    const normalizedAddress = quais.getAddress(address);
+    const whitelistModule = this.getWhitelistModuleContract(this.signer);
+    
+    // Estimate gas and add buffer to prevent "out of gas" errors
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await whitelistModule.removeFromWhitelist.estimateGas(walletAddress, normalizedAddress);
+      console.log('  Gas estimation for removeFromWhitelist succeeded:', estimatedGas.toString());
+    } catch (error: any) {
+      // If gas estimation fails, decode error for better message
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot remove from whitelist: ${errorMessage}`);
+    }
+
+    // Prepare transaction options with gas limit
+    const txOptions: any = {};
+    if (estimatedGas) {
+      // Add 100% buffer to estimated gas (doubled) to handle external calls to multisig wallet
+      // The removeFromWhitelist function makes external calls (isOwner) which can vary in gas cost
+      txOptions.gasLimit = estimatedGas * 2n;
+      // Ensure minimum of 400k gas even if estimation is low
+      if (txOptions.gasLimit < 400000n) {
+        txOptions.gasLimit = 400000n;
+      }
+      // Cap at 1M gas to prevent excessive limits
+      if (txOptions.gasLimit > 1000000n) {
+        txOptions.gasLimit = 1000000n;
+      }
+      console.log('  Using estimated gas with 100% buffer for removeFromWhitelist:', {
+        estimated: estimatedGas.toString(),
+        limit: txOptions.gasLimit.toString(),
+      });
+    } else {
+      // Fallback to generous default (increased to 500k)
+      txOptions.gasLimit = 500000n;
+      console.warn('  Gas estimation failed for removeFromWhitelist, using default:', txOptions.gasLimit.toString());
+    }
+    
+    let tx;
+    try {
+      tx = await whitelistModule.removeFromWhitelist(walletAddress, normalizedAddress, txOptions);
+    } catch (error: any) {
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+
+    // Log actual gas used for debugging
+    if (receipt.gasUsed) {
+      console.log('  Actual gas used for removeFromWhitelist:', receipt.gasUsed.toString());
+      if (txOptions.gasLimit && receipt.gasUsed > txOptions.gasLimit * 95n / 100n) {
+        console.warn('  Warning: Gas usage was very close to limit!', {
+          used: receipt.gasUsed.toString(),
+          limit: txOptions.gasLimit.toString(),
+        });
+      }
+    }
+
+    // Check if transaction reverted
+    if (receipt.status === 0) {
+      const gasInfo = receipt.gasUsed ? ` Gas used: ${receipt.gasUsed.toString()}, Gas limit: ${txOptions.gasLimit?.toString() || 'unknown'}` : '';
+      throw new Error(`Transaction execution reverted. Possible causes: address not whitelisted, module not enabled, or insufficient gas.${gasInfo}`);
+    }
+  }
+
+  /**
+   * Check if address is whitelisted
+   */
+  async isWhitelisted(walletAddress: string, address: string): Promise<boolean> {
+    const whitelistModule = this.getWhitelistModuleContract();
+    return await whitelistModule.isWhitelisted(walletAddress, address);
+  }
+
+  /**
+   * Get whitelist limit for an address
+   */
+  async getWhitelistLimit(walletAddress: string, address: string): Promise<bigint> {
+    const whitelistModule = this.getWhitelistModuleContract();
+    return await whitelistModule.getWhitelistLimit(walletAddress, address);
+  }
+
+  /**
+   * Execute a transaction to a whitelisted address without requiring approvals
+   * This bypasses the normal multisig approval process for whitelisted addresses
+   */
+  async executeToWhitelist(
+    walletAddress: string,
+    to: string,
+    value: bigint,
+    data: string
+  ): Promise<string> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    // Validate address format
+    if (!quais.isAddress(to)) {
+      throw new Error(`Invalid recipient address format: ${to}`);
+    }
+
+    const normalizedTo = quais.getAddress(to);
+    const whitelistModule = this.getWhitelistModuleContract(this.signer);
+
+    // Check if address is whitelisted
+    const isWhitelisted = await this.isWhitelisted(walletAddress, normalizedTo);
+    if (!isWhitelisted) {
+      throw new Error(`Address ${normalizedTo} is not whitelisted`);
+    }
+
+    // Check limit if set
+    const limit = await this.getWhitelistLimit(walletAddress, normalizedTo);
+    if (limit > 0n && value > limit) {
+      throw new Error(`Transaction value ${value.toString()} exceeds whitelist limit ${limit.toString()}`);
+    }
+
+    // Check wallet balance before attempting execution
+    const walletBalance = await this.provider.getBalance(walletAddress);
+    if (walletBalance < value) {
+      throw new Error(`Insufficient balance: wallet has ${walletBalance.toString()}, trying to send ${value.toString()}`);
+    }
+
+    // Execute transaction through whitelist module
+    // Use explicit gas limit to prevent "not enough gas" errors
+    let tx;
+    let estimatedGas: bigint | null = null;
+    
+    // Try to estimate gas first to catch potential errors and determine gas limit
+    try {
+      estimatedGas = await whitelistModule.executeToWhitelist.estimateGas(walletAddress, normalizedTo, value, data);
+      console.log('  Gas estimation succeeded:', estimatedGas.toString());
+    } catch (error: any) {
+      // Try to decode the error reason
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.data) {
+        try {
+          const iface = whitelistModule.interface;
+          const decoded = iface.parseError(error.data);
+          if (decoded) {
+            errorMessage = `${decoded.name}: ${decoded.args.join(', ')}`;
+          }
+        } catch {
+          // If decoding fails, check for common error patterns
+          if (error.message) {
+            if (error.message.includes('insufficient funds') || error.message.includes('balance')) {
+              errorMessage = `Insufficient balance in wallet`;
+            } else if (error.message.includes('module not enabled')) {
+              errorMessage = `Whitelist module is not enabled for this wallet`;
+            } else if (error.message.includes('not whitelisted')) {
+              errorMessage = `Address ${normalizedTo} is not whitelisted`;
+            } else if (error.message.includes('exceeds limit')) {
+              errorMessage = `Transaction value exceeds whitelist limit`;
+            } else {
+              errorMessage = error.message;
+            }
+          }
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot execute transaction: ${errorMessage}`);
+    }
+
+    // Prepare transaction options with gas limit
+    const txOptions: any = {};
+    if (estimatedGas) {
+      // Add 20% buffer to estimated gas to prevent "not enough gas" errors
+      txOptions.gasLimit = (estimatedGas * 120n) / 100n;
+      console.log('  Using estimated gas with 20% buffer:', txOptions.gasLimit.toString());
+    } else {
+      // Fallback to generous default if estimation somehow failed (shouldn't happen due to throw above)
+      txOptions.gasLimit = 300000n;
+      console.log('  Using default gas limit:', txOptions.gasLimit.toString());
+    }
+    
+    try {
+      tx = await whitelistModule.executeToWhitelist(walletAddress, normalizedTo, value, data, txOptions);
+    } catch (error: any) {
+      // Handle user rejection
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+
+    // Check if transaction reverted
+    if (receipt.status === 0) {
+      throw new Error('Transaction execution reverted. Possible causes: insufficient balance, invalid recipient, or module not enabled.');
+    }
+
+    // Return transaction hash
+    return receipt.hash;
+  }
+
+  /**
+   * Check if a transaction can be executed via whitelist (address is whitelisted and within limit)
+   */
+  async canExecuteViaWhitelist(
+    walletAddress: string,
+    to: string,
+    value: bigint
+  ): Promise<{ canExecute: boolean; reason?: string }> {
+    try {
+      // Validate address format
+      if (!quais.isAddress(to)) {
+        return { canExecute: false, reason: 'Invalid address format' };
+      }
+
+      const normalizedTo = quais.getAddress(to);
+
+      // Check if whitelist module is enabled
+      const wallet = this.getWalletContract(walletAddress);
+      const isModuleEnabled = await wallet.modules(CONTRACT_ADDRESSES.WHITELIST_MODULE);
+      if (!isModuleEnabled) {
+        return { canExecute: false, reason: 'Whitelist module not enabled' };
+      }
+
+      // Check if address is whitelisted
+      const isWhitelisted = await this.isWhitelisted(walletAddress, normalizedTo);
+      if (!isWhitelisted) {
+        return { canExecute: false, reason: 'Address not whitelisted' };
+      }
+
+      // Check limit if set
+      const limit = await this.getWhitelistLimit(walletAddress, normalizedTo);
+      if (limit > 0n && value > limit) {
+        return { canExecute: false, reason: `Value exceeds whitelist limit of ${limit.toString()}` };
+      }
+
+      // Check wallet balance
+      const walletBalance = await this.provider.getBalance(walletAddress);
+      if (walletBalance < value) {
+        return { canExecute: false, reason: `Insufficient balance: wallet has ${walletBalance.toString()}, need ${value.toString()}` };
+      }
+
+      return { canExecute: true };
+    } catch (error) {
+      console.error('Error checking whitelist status:', error);
+      return { canExecute: false, reason: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  /**
+   * Get all whitelisted addresses by querying events
+   */
+  async getWhitelistedAddresses(walletAddress: string): Promise<Array<{ address: string; limit: bigint }>> {
+    const whitelistModule = this.getWhitelistModuleContract();
+    
+    // Query AddressWhitelisted events
+    const filter = whitelistModule.filters.AddressWhitelisted(walletAddress);
+    let events: any[];
+    
+    try {
+      // Query recent blocks - use conservative limit
+      console.log(`Querying AddressWhitelisted events from last 5000 blocks`);
+      events = await whitelistModule.queryFilter(filter, -5000, 'latest');
+      console.log(`Found ${events.length} AddressWhitelisted events`);
+    } catch (error: any) {
+      console.error('Error querying AddressWhitelisted events:', error);
+      if (error.message && error.message.includes('exceeds maximum limit')) {
+        try {
+          events = await whitelistModule.queryFilter(filter, -2000, 'latest');
+        } catch (retryError) {
+          console.error('Retry also failed:', retryError);
+          events = [];
+        }
+      } else {
+        events = [];
+      }
+    }
+
+    // Also query removal events to filter out removed addresses
+    const removalFilter = whitelistModule.filters.AddressRemovedFromWhitelist(walletAddress);
+    let removalEvents: any[];
+    
+    try {
+      removalEvents = await whitelistModule.queryFilter(removalFilter, -5000, 'latest');
+    } catch (error: any) {
+      if (error.message && error.message.includes('exceeds maximum limit')) {
+        try {
+          removalEvents = await whitelistModule.queryFilter(removalFilter, -2000, 'latest');
+        } catch {
+          removalEvents = [];
+        }
+      } else {
+        removalEvents = [];
+      }
+    }
+
+    // Build a map of addresses to their latest limit (by block number)
+    const addressMap = new Map<string, { limit: bigint; blockNumber: number }>();
+    const removedAddresses = new Map<string, number>(); // address -> block number
+
+    // Process removal events first (track block numbers)
+    for (const event of removalEvents) {
+      if (event.args && event.args.addr) {
+        const addr = event.args.addr.toLowerCase();
+        const blockNumber = event.blockNumber;
+        // Keep the latest removal event
+        const existingRemoval = removedAddresses.get(addr);
+        if (!existingRemoval || blockNumber > existingRemoval) {
+          removedAddresses.set(addr, blockNumber);
+        }
+      }
+    }
+
+    // Process whitelist events (later events override earlier ones)
+    for (const event of events) {
+      if (event.args && event.args.addr) {
+        const addr = event.args.addr.toLowerCase();
+        const blockNumber = event.blockNumber;
+        const removalBlock = removedAddresses.get(addr);
+        
+        // Only add if not removed, or if this whitelist event happened after the removal
+        if (!removalBlock || blockNumber > removalBlock) {
+          const existing = addressMap.get(addr);
+          // Keep the latest whitelist event
+          if (!existing || blockNumber > existing.blockNumber) {
+            addressMap.set(addr, { limit: event.args.limit || 0n, blockNumber });
+          }
+        }
+      }
+    }
+
+    // Convert map to array and verify on-chain status
+    const result: Array<{ address: string; limit: bigint }> = [];
+    const verificationPromises: Promise<void>[] = [];
+    
+    for (const [address, data] of addressMap.entries()) {
+      // Verify the address is still whitelisted (in case events are out of order or recent)
+      const verifyPromise = (async () => {
+        try {
+          const isStillWhitelisted = await this.isWhitelisted(walletAddress, address);
+          if (isStillWhitelisted) {
+            const currentLimit = await this.getWhitelistLimit(walletAddress, address);
+            result.push({ address, limit: currentLimit });
+          } else {
+            console.log(`Address ${address} found in events but not whitelisted on-chain (may have been removed)`);
+          }
+        } catch (error) {
+          console.error(`Error verifying whitelist status for ${address}:`, error);
+          // If verification fails but we have event data, include it anyway
+          // This handles cases where the event exists but RPC is slow
+          result.push({ address, limit: data.limit });
+        }
+      })();
+      verificationPromises.push(verifyPromise);
+    }
+    
+    // Wait for all verifications to complete
+    await Promise.all(verificationPromises);
+    
+    console.log(`Returning ${result.length} whitelisted addresses`);
+    return result;
+  }
+
+  /**
+   * Get daily limit module contract instance
+   */
+  private getDailyLimitModuleContract(signerOrProvider?: Signer | Provider): Contract {
+    const abi = Array.isArray(DailyLimitModuleABI) ? DailyLimitModuleABI : (DailyLimitModuleABI as any).abi;
+    return new quais.Contract(
+      CONTRACT_ADDRESSES.DAILY_LIMIT_MODULE,
+      abi,
+      signerOrProvider || this.provider
+    ) as Contract;
+  }
+
+  /**
+   * Set daily spending limit
+   * Note: This is a direct call (not a multisig transaction) since the module handles owner checks
+   */
+  async setDailyLimit(walletAddress: string, limit: bigint): Promise<void> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    const dailyLimitModule = this.getDailyLimitModuleContract(this.signer);
+
+    // Estimate gas and add buffer to prevent "out of gas" errors
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await dailyLimitModule.setDailyLimit.estimateGas(walletAddress, limit);
+      console.log('  Gas estimation for setDailyLimit succeeded:', estimatedGas.toString());
+    } catch (error: any) {
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot set daily limit: ${errorMessage}`);
+    }
+
+    // Prepare transaction options with gas limit
+    const txOptions: any = {};
+    if (estimatedGas) {
+      txOptions.gasLimit = (estimatedGas * 120n) / 100n;
+      console.log('  Using estimated gas with 20% buffer:', txOptions.gasLimit.toString());
+    } else {
+      txOptions.gasLimit = 200000n;
+      console.log('  Using default gas limit:', txOptions.gasLimit.toString());
+    }
+
+    const tx = await dailyLimitModule.setDailyLimit(walletAddress, limit, txOptions);
+    await tx.wait();
+  }
+
+  /**
+   * Get daily limit configuration
+   */
+  async getDailyLimit(walletAddress: string): Promise<{ limit: bigint; spent: bigint; lastReset: bigint }> {
+    const dailyLimitModule = this.getDailyLimitModuleContract();
+    return await dailyLimitModule.getDailyLimit(walletAddress);
+  }
+
+  /**
+   * Reset daily limit (manually reset spent amount)
+   */
+  async resetDailyLimit(walletAddress: string): Promise<void> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    const dailyLimitModule = this.getDailyLimitModuleContract(this.signer);
+
+    // Estimate gas and add buffer
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await dailyLimitModule.resetDailyLimit.estimateGas(walletAddress);
+      console.log('  Gas estimation for resetDailyLimit succeeded:', estimatedGas.toString());
+    } catch (error: any) {
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot reset daily limit: ${errorMessage}`);
+    }
+
+    // Prepare transaction options with gas limit
+    const txOptions: any = {};
+    if (estimatedGas) {
+      txOptions.gasLimit = (estimatedGas * 120n) / 100n;
+      console.log('  Using estimated gas with 20% buffer:', txOptions.gasLimit.toString());
+    } else {
+      txOptions.gasLimit = 200000n;
+      console.log('  Using default gas limit:', txOptions.gasLimit.toString());
+    }
+
+    const tx = await dailyLimitModule.resetDailyLimit(walletAddress, txOptions);
+    await tx.wait();
+  }
+
+  /**
+   * Get remaining daily limit
+   */
+  async getRemainingLimit(walletAddress: string): Promise<bigint> {
+    const dailyLimitModule = this.getDailyLimitModuleContract();
+    return await dailyLimitModule.getRemainingLimit(walletAddress);
+  }
+
+  /**
+   * Get time until limit resets (in seconds)
+   */
+  async getTimeUntilReset(walletAddress: string): Promise<bigint> {
+    const dailyLimitModule = this.getDailyLimitModuleContract();
+    return await dailyLimitModule.getTimeUntilReset(walletAddress);
+  }
+
+  /**
+   * Execute transaction below daily limit (bypasses approval requirement)
+   * Note: This is ONLY enforced in the frontend. Users can bypass this by interacting with the multisig directly.
+   */
+  async executeBelowLimit(
+    walletAddress: string,
+    to: string,
+    value: bigint
+  ): Promise<string> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    // Validate address format
+    if (!quais.isAddress(to)) {
+      throw new Error(`Invalid recipient address format: ${to}`);
+    }
+
+    const normalizedTo = quais.getAddress(to);
+    const dailyLimitModule = this.getDailyLimitModuleContract(this.signer);
+
+    // Check wallet balance before attempting execution
+    const walletBalance = await this.provider.getBalance(walletAddress);
+    if (walletBalance < value) {
+      throw new Error(`Insufficient balance: wallet has ${walletBalance.toString()}, trying to send ${value.toString()}`);
+    }
+
+    // Estimate gas and add buffer
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await dailyLimitModule.executeBelowLimit.estimateGas(walletAddress, normalizedTo, value);
+      console.log('  Gas estimation for executeBelowLimit succeeded:', estimatedGas.toString());
+    } catch (error: any) {
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        if (error.message.includes('exceeds daily limit')) {
+          errorMessage = 'Transaction exceeds daily limit';
+        } else if (error.message.includes('Daily limit not set')) {
+          errorMessage = 'Daily limit is not configured';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      throw new Error(`Cannot execute transaction: ${errorMessage}`);
+    }
+
+    // Prepare transaction options with gas limit
+    const txOptions: any = {};
+    if (estimatedGas) {
+      txOptions.gasLimit = (estimatedGas * 120n) / 100n;
+      console.log('  Using estimated gas with 20% buffer:', txOptions.gasLimit.toString());
+    } else {
+      txOptions.gasLimit = 300000n;
+      console.log('  Using default gas limit:', txOptions.gasLimit.toString());
+    }
+
+    let tx;
+    try {
+      tx = await dailyLimitModule.executeBelowLimit(walletAddress, normalizedTo, value, txOptions);
+    } catch (error: any) {
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+
+    // Check if transaction reverted
+    if (receipt.status === 0) {
+      throw new Error('Transaction execution reverted. Possible causes: exceeds daily limit, insufficient balance, or module not enabled.');
+    }
+
+    return receipt.hash;
+  }
+
+  /**
+   * Check if a transaction can be executed via daily limit
+   * Note: This is ONLY enforced in the frontend. Users can bypass this by interacting with the multisig directly.
+   */
+  async canExecuteViaDailyLimit(
+    walletAddress: string,
+    value: bigint
+  ): Promise<{ canExecute: boolean; reason?: string }> {
+    try {
+      // Check if daily limit module is enabled
+      const wallet = this.getWalletContract(walletAddress);
+      const isModuleEnabled = await wallet.modules(CONTRACT_ADDRESSES.DAILY_LIMIT_MODULE);
+      if (!isModuleEnabled) {
+        return { canExecute: false, reason: 'Daily limit module not enabled' };
+      }
+
+      // Check if daily limit is set
+      const dailyLimit = await this.getDailyLimit(walletAddress);
+      if (dailyLimit.limit === 0n) {
+        return { canExecute: false, reason: 'Daily limit not configured' };
+      }
+
+      // Check remaining limit
+      const remainingLimit = await this.getRemainingLimit(walletAddress);
+      if (remainingLimit < value) {
+        return { canExecute: false, reason: `Transaction value exceeds remaining daily limit of ${transactionBuilderService.formatValue(remainingLimit)} QUAI` };
+      }
+
+      // Check wallet balance
+      const walletBalance = await this.provider.getBalance(walletAddress);
+      if (walletBalance < value) {
+        return { canExecute: false, reason: `Insufficient balance: wallet has ${walletBalance.toString()}, need ${value.toString()}` };
+      }
+
+      return { canExecute: true };
+    } catch (error) {
+      console.error('Error checking daily limit status:', error);
+      return { canExecute: false, reason: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  /**
    * Get wallet contract instance
    */
   private getWalletContract(walletAddress: string, signerOrProvider?: Signer | Provider): Contract {
@@ -2419,6 +3196,665 @@ export class MultisigService {
       MultisigWalletABI.abi,
       signerOrProvider || this.provider
     ) as Contract;
+  }
+
+  /**
+   * Get social recovery module contract instance
+   */
+  private getSocialRecoveryModuleContract(signerOrProvider?: Signer | Provider): Contract {
+    const abi = Array.isArray(SocialRecoveryModuleABI) ? SocialRecoveryModuleABI : (SocialRecoveryModuleABI as any).abi;
+    return new quais.Contract(
+      CONTRACT_ADDRESSES.SOCIAL_RECOVERY_MODULE,
+      abi,
+      signerOrProvider || this.provider
+    ) as Contract;
+  }
+
+  /**
+   * Get recovery configuration for a wallet
+   */
+  async getRecoveryConfig(walletAddress: string): Promise<{
+    guardians: string[];
+    threshold: bigint;
+    recoveryPeriod: bigint;
+  }> {
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract();
+    const config = await socialRecoveryModule.getRecoveryConfig(walletAddress);
+    return {
+      guardians: config.guardians || [],
+      threshold: config.threshold || 0n,
+      recoveryPeriod: config.recoveryPeriod || 0n,
+    };
+  }
+
+  /**
+   * Setup recovery configuration
+   * Note: This is a direct call (not a multisig transaction) since the module handles owner checks
+   */
+  async setupRecovery(
+    walletAddress: string,
+    guardians: string[],
+    threshold: number,
+    recoveryPeriodDays: number
+  ): Promise<void> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    // Validate guardians
+    const normalizedGuardians = guardians.map(addr => {
+      if (!quais.isAddress(addr)) {
+        throw new Error(`Invalid guardian address format: ${addr}`);
+      }
+      return quais.getAddress(addr);
+    });
+
+    // Validate threshold
+    if (threshold < 1 || threshold > normalizedGuardians.length) {
+      throw new Error(`Invalid threshold: must be between 1 and ${normalizedGuardians.length}`);
+    }
+
+    // Convert days to seconds (minimum 1 day = 86400 seconds)
+    const recoveryPeriodSeconds = BigInt(recoveryPeriodDays) * 86400n;
+    if (recoveryPeriodSeconds < 86400n) {
+      throw new Error('Recovery period must be at least 1 day');
+    }
+
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract(this.signer);
+
+    // Estimate gas and add buffer
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await socialRecoveryModule.setupRecovery.estimateGas(
+        walletAddress,
+        normalizedGuardians,
+        threshold,
+        recoveryPeriodSeconds
+      );
+      console.log('  Gas estimation for setupRecovery succeeded:', estimatedGas.toString());
+    } catch (error: any) {
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot setup recovery: ${errorMessage}`);
+    }
+
+    // Prepare transaction options with gas limit
+    const txOptions: any = {};
+    if (estimatedGas) {
+      // Add 100% buffer to estimated gas
+      txOptions.gasLimit = estimatedGas * 2n;
+      if (txOptions.gasLimit < 400000n) {
+        txOptions.gasLimit = 400000n;
+      }
+      if (txOptions.gasLimit > 1000000n) {
+        txOptions.gasLimit = 1000000n;
+      }
+      console.log('  Using estimated gas with 100% buffer for setupRecovery:', txOptions.gasLimit.toString());
+    } else {
+      txOptions.gasLimit = 500000n;
+      console.warn('  Gas estimation failed for setupRecovery, using default:', txOptions.gasLimit.toString());
+    }
+
+    let tx;
+    try {
+      tx = await socialRecoveryModule.setupRecovery(
+        walletAddress,
+        normalizedGuardians,
+        threshold,
+        recoveryPeriodSeconds,
+        txOptions
+      );
+    } catch (error: any) {
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+
+    if (receipt.status === 0) {
+      throw new Error('Transaction execution reverted. Possible causes: invalid guardians, threshold, or recovery period.');
+    }
+  }
+
+  /**
+   * Check if an address is a guardian for a wallet
+   */
+  async isGuardian(walletAddress: string, address: string): Promise<boolean> {
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract();
+    return await socialRecoveryModule.isGuardian(walletAddress, address);
+  }
+
+  /**
+   * Check if an address has approved a recovery
+   * Note: With the nonce-based recovery hash, each recovery has a unique hash,
+   * so stale approvals from cancelled recoveries won't interfere.
+   */
+  async hasApprovedRecovery(walletAddress: string, recoveryHash: string, address: string): Promise<boolean> {
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract();
+    
+    console.log(`hasApprovedRecovery: Checking approval for wallet ${walletAddress}, recovery ${recoveryHash.slice(0, 10)}..., address ${address}`);
+    
+    // First verify the recovery is actually active
+    try {
+      const recovery = await this.getRecovery(walletAddress, recoveryHash);
+      console.log(`hasApprovedRecovery: Recovery state - executionTime: ${recovery.executionTime}, executed: ${recovery.executed}, approvalCount: ${recovery.approvalCount}`);
+      
+      // If recovery doesn't exist (executionTime == 0), it was cancelled - no approvals count
+      if (recovery.executionTime === 0n) {
+        console.log(`hasApprovedRecovery: Recovery has executionTime 0, returning false`);
+        return false;
+      }
+      
+      if (recovery.executed) {
+        console.log(`hasApprovedRecovery: Recovery already executed, returning false`);
+        return false;
+      }
+    } catch (error) {
+      // If we can't fetch recovery, assume approval is invalid
+      console.warn(`hasApprovedRecovery: Could not verify recovery state for ${recoveryHash}, assuming not approved:`, error);
+      return false;
+    }
+    
+    // Check the approval status - with nonce-based hashes, this should be accurate
+    try {
+      const hasApproved = await socialRecoveryModule.recoveryApprovals(walletAddress, recoveryHash, address);
+      console.log(`hasApprovedRecovery: Approval status from contract: ${hasApproved}`);
+      
+      // Double-check: If approvalCount is 0 but hasApproved is true, it's a stale approval
+      // This can happen if the contract wasn't redeployed with nonce changes
+      const recovery = await this.getRecovery(walletAddress, recoveryHash);
+      if (hasApproved && recovery.approvalCount === 0n) {
+        console.warn(`hasApprovedRecovery: Stale approval detected - hasApproved=true but approvalCount=0. This suggests the contract may not have nonce-based hashes yet.`);
+        // Return false to allow approval, but the contract call will likely fail
+        // The user will see the actual error from the contract
+        return false;
+      }
+      
+      return hasApproved;
+    } catch (error) {
+      console.error(`hasApprovedRecovery: Error checking approval status:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Get recovery hash for given parameters with current nonce
+   * Note: The contract will increment the nonce when initiating, so this gives the hash for the next recovery
+   */
+  async getRecoveryHash(
+    walletAddress: string,
+    newOwners: string[],
+    newThreshold: number
+  ): Promise<string> {
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract();
+    const normalizedOwners = newOwners.map(addr => quais.getAddress(addr));
+    return await socialRecoveryModule.getRecoveryHashForCurrentNonce(walletAddress, normalizedOwners, newThreshold);
+  }
+
+  /**
+   * Get recovery details
+   */
+  async getRecovery(
+    walletAddress: string,
+    recoveryHash: string
+  ): Promise<{
+    newOwners: string[];
+    newThreshold: bigint;
+    approvalCount: bigint;
+    executionTime: bigint;
+    executed: boolean;
+  }> {
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract();
+    const recovery = await socialRecoveryModule.getRecovery(walletAddress, recoveryHash);
+    return {
+      newOwners: recovery.newOwners || [],
+      newThreshold: recovery.newThreshold || 0n,
+      approvalCount: recovery.approvalCount || 0n,
+      executionTime: recovery.executionTime || 0n,
+      executed: recovery.executed || false,
+    };
+  }
+
+  /**
+   * Initiate recovery (guardians only)
+   */
+  async initiateRecovery(
+    walletAddress: string,
+    newOwners: string[],
+    newThreshold: number
+  ): Promise<string> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    const normalizedOwners = newOwners.map(addr => {
+      if (!quais.isAddress(addr)) {
+        throw new Error(`Invalid owner address format: ${addr}`);
+      }
+      return quais.getAddress(addr);
+    });
+
+    if (normalizedOwners.length === 0) {
+      throw new Error('At least one new owner is required');
+    }
+
+    if (newThreshold < 1 || newThreshold > normalizedOwners.length) {
+      throw new Error(`Invalid threshold: must be between 1 and ${normalizedOwners.length}`);
+    }
+
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract(this.signer);
+
+    // Estimate gas
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await socialRecoveryModule.initiateRecovery.estimateGas(
+        walletAddress,
+        normalizedOwners,
+        newThreshold
+      );
+    } catch (error: any) {
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot initiate recovery: ${errorMessage}`);
+    }
+
+    const txOptions: any = {};
+    if (estimatedGas) {
+      txOptions.gasLimit = estimatedGas * 2n;
+      if (txOptions.gasLimit < 400000n) {
+        txOptions.gasLimit = 400000n;
+      }
+      if (txOptions.gasLimit > 1000000n) {
+        txOptions.gasLimit = 1000000n;
+      }
+    } else {
+      txOptions.gasLimit = 500000n;
+    }
+
+    let tx;
+    try {
+      tx = await socialRecoveryModule.initiateRecovery(
+        walletAddress,
+        normalizedOwners,
+        newThreshold,
+        txOptions
+      );
+    } catch (error: any) {
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction execution reverted');
+    }
+
+    // Get recovery hash from event logs (contract now includes nonce in hash)
+    let recoveryHash: string | null = null;
+    if (receipt.logs) {
+      const socialRecoveryModule = this.getSocialRecoveryModuleContract();
+      for (const log of receipt.logs) {
+        try {
+          const parsedLog = socialRecoveryModule.interface.parseLog(log);
+          if (parsedLog && parsedLog.name === 'RecoveryInitiated') {
+            recoveryHash = parsedLog.args.recoveryHash;
+            console.log('Found recovery hash from event:', recoveryHash);
+            break;
+          }
+        } catch (error) {
+          // Not a RecoveryInitiated event, continue
+        }
+      }
+    }
+
+    // The contract also returns the recovery hash, but we prefer getting it from events
+    // If not found in events, try to get it from the transaction return value
+    if (!recoveryHash) {
+      try {
+        // The contract's initiateRecovery returns the recovery hash
+        // But since we already waited for the receipt, we need to get it from events
+        // If events parsing failed, we can't reliably get the hash
+        throw new Error('Could not extract recovery hash from transaction events');
+      } catch (error) {
+        console.error('Failed to get recovery hash:', error);
+        throw new Error('Failed to get recovery hash from transaction. Please check the transaction receipt.');
+      }
+    }
+
+    return recoveryHash;
+  }
+
+  /**
+   * Approve recovery (guardians only)
+   */
+  async approveRecovery(walletAddress: string, recoveryHash: string): Promise<void> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract(this.signer);
+    const signerAddress = await this.signer.getAddress();
+
+    // Check if recovery is active and if user has already approved
+    try {
+      const recovery = await this.getRecovery(walletAddress, recoveryHash);
+      if (recovery.executionTime === 0n) {
+        throw new Error('Recovery has been cancelled or does not exist');
+      }
+      if (recovery.executed) {
+        throw new Error('Recovery has already been executed');
+      }
+      
+      // Check approval status - with nonce-based hashes, each recovery has a unique hash
+      // so stale approvals from cancelled recoveries won't interfere
+      const hasApproved = await socialRecoveryModule.recoveryApprovals(walletAddress, recoveryHash, signerAddress);
+      if (hasApproved) {
+        throw new Error('You have already approved this recovery');
+      }
+    } catch (error: any) {
+      // If it's already our custom error, re-throw it
+      if (error.message && (error.message.includes('cancelled') || error.message.includes('already approved'))) {
+        throw error;
+      }
+      // Otherwise, continue to gas estimation which might give more details
+    }
+
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await socialRecoveryModule.approveRecovery.estimateGas(walletAddress, recoveryHash);
+    } catch (error: any) {
+      let errorMessage = 'Transaction would fail';
+      
+      // Try to decode the revert reason
+      if (error.data) {
+        try {
+          const decoded = socialRecoveryModule.interface.parseError(error.data);
+          if (decoded) {
+            errorMessage = decoded.name;
+            if (decoded.args && decoded.args.length > 0) {
+              errorMessage += `: ${decoded.args[0]}`;
+            }
+          }
+        } catch (decodeError) {
+          // If decoding fails, try to get reason from error
+          if (error.reason) {
+            errorMessage = error.reason;
+          } else if (error.message) {
+            errorMessage = error.message;
+          }
+        }
+      } else if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+        // Check for common revert reasons in the message
+        if (error.message.includes('Already approved') || error.message.includes('already approved')) {
+          errorMessage = 'You have already approved this recovery. If you previously approved a recovery with the same parameters that was cancelled, you cannot approve a new recovery with identical parameters due to a contract limitation.';
+        } else if (error.message.includes('Not a guardian')) {
+          errorMessage = 'You are not a guardian for this wallet';
+        } else if (error.message.includes('Recovery not initiated')) {
+          errorMessage = 'This recovery has been cancelled or does not exist';
+        } else if (error.message.includes('Recovery already executed')) {
+          errorMessage = 'This recovery has already been executed';
+        }
+      }
+      
+      throw new Error(`Cannot approve recovery: ${errorMessage}`);
+    }
+
+    const txOptions: any = {};
+    if (estimatedGas) {
+      txOptions.gasLimit = estimatedGas * 2n;
+      if (txOptions.gasLimit < 200000n) {
+        txOptions.gasLimit = 200000n;
+      }
+    } else {
+      txOptions.gasLimit = 300000n;
+    }
+
+    let tx;
+    try {
+      tx = await socialRecoveryModule.approveRecovery(walletAddress, recoveryHash, txOptions);
+    } catch (error: any) {
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction execution reverted');
+    }
+  }
+
+  /**
+   * Execute recovery (anyone, once conditions met)
+   */
+  async executeRecovery(walletAddress: string, recoveryHash: string): Promise<void> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract(this.signer);
+
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await socialRecoveryModule.executeRecovery.estimateGas(walletAddress, recoveryHash);
+    } catch (error: any) {
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot execute recovery: ${errorMessage}`);
+    }
+
+    const txOptions: any = {};
+    if (estimatedGas) {
+      txOptions.gasLimit = estimatedGas * 2n;
+      if (txOptions.gasLimit < 500000n) {
+        txOptions.gasLimit = 500000n;
+      }
+      if (txOptions.gasLimit > 2000000n) {
+        txOptions.gasLimit = 2000000n;
+      }
+    } else {
+      txOptions.gasLimit = 1000000n;
+    }
+
+    let tx;
+    try {
+      tx = await socialRecoveryModule.executeRecovery(walletAddress, recoveryHash, txOptions);
+    } catch (error: any) {
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction execution reverted');
+    }
+  }
+
+  /**
+   * Cancel recovery (owners only)
+   */
+  async cancelRecovery(walletAddress: string, recoveryHash: string): Promise<void> {
+    if (!this.signer) {
+      throw new Error('Signer not set. Connect wallet first.');
+    }
+
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract(this.signer);
+
+    let estimatedGas: bigint | null = null;
+    try {
+      estimatedGas = await socialRecoveryModule.cancelRecovery.estimateGas(walletAddress, recoveryHash);
+    } catch (error: any) {
+      let errorMessage = 'Transaction would fail';
+      if (error.reason) {
+        errorMessage = error.reason;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      throw new Error(`Cannot cancel recovery: ${errorMessage}`);
+    }
+
+    const txOptions: any = {};
+    if (estimatedGas) {
+      txOptions.gasLimit = estimatedGas * 2n;
+      if (txOptions.gasLimit < 200000n) {
+        txOptions.gasLimit = 200000n;
+      }
+    } else {
+      txOptions.gasLimit = 300000n;
+    }
+
+    let tx;
+    try {
+      tx = await socialRecoveryModule.cancelRecovery(walletAddress, recoveryHash, txOptions);
+    } catch (error: any) {
+      if (error.code === 'ACTION_REJECTED' || error.code === 4001 ||
+          (error.message && (error.message.includes('rejected') || error.message.includes('denied') || error.message.includes('cancelled')))) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction execution reverted');
+    }
+  }
+
+  /**
+   * Get all pending recoveries by querying events
+   */
+  async getPendingRecoveries(walletAddress: string): Promise<Array<{
+    recoveryHash: string;
+    newOwners: string[];
+    newThreshold: bigint;
+    approvalCount: bigint;
+    executionTime: bigint;
+    executed: boolean;
+  }>> {
+    const socialRecoveryModule = this.getSocialRecoveryModuleContract();
+    
+    // Query RecoveryInitiated events - use relative block numbers for better compatibility
+    const filter = socialRecoveryModule.filters.RecoveryInitiated(walletAddress);
+    let events: any[];
+    
+    try {
+      // Query from 5000 blocks ago to latest
+      events = await socialRecoveryModule.queryFilter(filter, -5000, 'latest');
+      console.log(`Found ${events.length} RecoveryInitiated events for wallet ${walletAddress}`);
+    } catch (error: any) {
+      console.error('Error querying RecoveryInitiated events:', error);
+      if (error.message && error.message.includes('exceeds maximum limit')) {
+        try {
+          // Try with a smaller range
+          events = await socialRecoveryModule.queryFilter(filter, -2000, 'latest');
+          console.log(`Found ${events.length} RecoveryInitiated events (smaller range) for wallet ${walletAddress}`);
+        } catch (innerError) {
+          console.error('Error querying RecoveryInitiated events with smaller range:', innerError);
+          events = [];
+        }
+      } else {
+        events = [];
+      }
+    }
+
+    // Note: We don't query cancelled/executed events anymore because:
+    // 1. Same recovery hash can be re-initiated after cancellation
+    // 2. On-chain state (executionTime === 0) is the source of truth for cancelled recoveries
+    // 3. On-chain state (executed flag) is the source of truth for executed recoveries
+
+    // Get recovery details for each initiated recovery
+    const recoveries: Array<{
+      recoveryHash: string;
+      newOwners: string[];
+      newThreshold: bigint;
+      approvalCount: bigint;
+      executionTime: bigint;
+      executed: boolean;
+    }> = [];
+
+    console.log(`Processing ${events.length} RecoveryInitiated events`);
+    
+    // Process all events, but check on-chain state to determine if recovery is active
+    // Same recovery hash can appear multiple times if recovery was cancelled and re-initiated
+    for (const event of events) {
+      const recoveryHash = event.args?.recoveryHash;
+      if (!recoveryHash) {
+        console.warn('RecoveryInitiated event missing recoveryHash:', event);
+        console.warn('Event args:', event.args);
+        continue;
+      }
+      
+      const hashLower = recoveryHash.toLowerCase();
+      console.log(`Processing recovery hash: ${recoveryHash}`);
+      
+      // Check on-chain state - this is the source of truth
+      // Don't rely on cancelled/executed events since recovery can be re-initiated
+      try {
+        console.log(`Fetching recovery details for ${recoveryHash}`);
+        const recovery = await this.getRecovery(walletAddress, recoveryHash);
+        console.log(`Recovery details:`, recovery);
+        
+        // Check if recovery exists (executionTime != 0 means it was initiated and not cancelled)
+        // If executionTime is 0, the recovery was cancelled (delete sets it to 0)
+        if (recovery.executionTime === 0n) {
+          console.log(`Recovery ${recoveryHash} has executionTime 0, cancelled or invalid - skipping`);
+          continue;
+        }
+        
+        // If executed flag is true, skip it
+        if (recovery.executed) {
+          console.log(`Recovery ${recoveryHash} is already executed, skipping`);
+          continue;
+        }
+        
+        // Recovery exists and is active - include it
+        // Check if we already added this recovery hash (avoid duplicates)
+        const alreadyAdded = recoveries.some(r => r.recoveryHash.toLowerCase() === hashLower);
+        if (!alreadyAdded) {
+          recoveries.push({
+            recoveryHash,
+            ...recovery,
+          });
+          console.log(`Added recovery ${recoveryHash} to list`);
+        } else {
+          console.log(`Recovery ${recoveryHash} already in list, skipping duplicate`);
+        }
+      } catch (error) {
+        console.error(`Error fetching recovery ${recoveryHash}:`, error);
+        // If we can't fetch recovery details, we can't determine if it's active
+        // Skip it to avoid showing invalid recoveries
+        continue;
+      }
+    }
+
+    console.log(`Returning ${recoveries.length} pending recoveries`);
+    return recoveries;
   }
 }
 
