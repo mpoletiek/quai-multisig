@@ -357,6 +357,254 @@ describe("MultisigWallet", function () {
     });
   });
 
+  describe("Transaction Cancellation", function () {
+    let txHash: string;
+
+    beforeEach(async function () {
+      await owner1.sendTransaction({
+        to: await wallet.getAddress(),
+        value: ethers.parseEther("10.0"),
+      });
+
+      const to = nonOwner.address;
+      const value = ethers.parseEther("1.0");
+      const data = "0x";
+
+      const tx = await wallet.connect(owner1).proposeTransaction(to, value, data);
+      const receipt = await tx.wait();
+
+      const event = receipt?.logs.find((log) => {
+        try {
+          return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
+        } catch {
+          return false;
+        }
+      });
+
+      const parsedEvent = wallet.interface.parseLog(event as any);
+      txHash = parsedEvent?.args[0];
+    });
+
+    it("should allow proposer to cancel transaction", async function () {
+      await expect(wallet.connect(owner1).cancelTransaction(txHash))
+        .to.emit(wallet, "TransactionCancelled")
+        .withArgs(txHash, owner1.address);
+
+      const transaction = await wallet.getTransaction(txHash);
+      expect(transaction.cancelled).to.be.true;
+    });
+
+    it("should allow cancellation after threshold approvals", async function () {
+      await wallet.connect(owner2).approveTransaction(txHash);
+      await wallet.connect(owner3).approveTransaction(txHash);
+
+      await expect(wallet.connect(owner1).cancelTransaction(txHash))
+        .to.emit(wallet, "TransactionCancelled");
+    });
+
+    it("should prevent execution of cancelled transaction", async function () {
+      // Get approvals first
+      await wallet.connect(owner2).approveTransaction(txHash);
+      await wallet.connect(owner3).approveTransaction(txHash);
+
+      // Then cancel
+      await wallet.connect(owner1).cancelTransaction(txHash);
+
+      // Try to execute - should fail because transaction is cancelled
+      await expect(
+        wallet.connect(owner3).executeTransaction(txHash)
+      ).to.be.revertedWith("Transaction already cancelled");
+    });
+
+    it("should reject cancellation from non-proposer before threshold", async function () {
+      await expect(
+        wallet.connect(owner2).cancelTransaction(txHash)
+      ).to.be.revertedWith("Not proposer and not enough approvals to cancel");
+    });
+  });
+
+  describe("Owner Management", function () {
+    it("should add owner through multisig", async function () {
+      const newOwner = nonOwner.address;
+      const addOwnerData = wallet.interface.encodeFunctionData("addOwner", [newOwner]);
+
+      const proposeTx = await wallet.connect(owner1).proposeTransaction(await wallet.getAddress(), 0, addOwnerData);
+      const proposeReceipt = await proposeTx.wait();
+      const proposeEvent = proposeReceipt?.logs.find((log) => {
+        try {
+          return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
+        } catch {
+          return false;
+        }
+      });
+      const proposeParsed = wallet.interface.parseLog(proposeEvent as any);
+      const txHash = proposeParsed?.args[0];
+
+      await wallet.connect(owner1).approveTransaction(txHash);
+      await wallet.connect(owner2).approveTransaction(txHash);
+      await wallet.connect(owner3).executeTransaction(txHash);
+
+      expect(await wallet.isOwner(newOwner)).to.be.true;
+      const owners = await wallet.getOwners();
+      expect(owners).to.include(newOwner);
+    });
+
+    it("should remove owner through multisig", async function () {
+      const removeOwnerData = wallet.interface.encodeFunctionData("removeOwner", [owner3.address]);
+
+      const proposeTx = await wallet.connect(owner1).proposeTransaction(await wallet.getAddress(), 0, removeOwnerData);
+      const proposeReceipt = await proposeTx.wait();
+      const proposeEvent = proposeReceipt?.logs.find((log) => {
+        try {
+          return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
+        } catch {
+          return false;
+        }
+      });
+      const proposeParsed = wallet.interface.parseLog(proposeEvent as any);
+      const txHash = proposeParsed?.args[0];
+
+      await wallet.connect(owner1).approveTransaction(txHash);
+      await wallet.connect(owner2).approveTransaction(txHash);
+      await wallet.connect(owner3).executeTransaction(txHash);
+
+      expect(await wallet.isOwner(owner3.address)).to.be.false;
+      const owners = await wallet.getOwners();
+      expect(owners).to.not.include(owner3.address);
+    });
+
+    it("should change threshold through multisig", async function () {
+      const newThreshold = 3;
+      const changeThresholdData = wallet.interface.encodeFunctionData("changeThreshold", [newThreshold]);
+
+      const proposeTx = await wallet.connect(owner1).proposeTransaction(await wallet.getAddress(), 0, changeThresholdData);
+      const proposeReceipt = await proposeTx.wait();
+      const proposeEvent = proposeReceipt?.logs.find((log) => {
+        try {
+          return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
+        } catch {
+          return false;
+        }
+      });
+      const proposeParsed = wallet.interface.parseLog(proposeEvent as any);
+      const txHash = proposeParsed?.args[0];
+
+      await wallet.connect(owner1).approveTransaction(txHash);
+      await wallet.connect(owner2).approveTransaction(txHash);
+      await wallet.connect(owner3).executeTransaction(txHash);
+
+      expect(await wallet.threshold()).to.equal(newThreshold);
+    });
+  });
+
+  describe("Edge Cases", function () {
+    it("should handle zero value transactions", async function () {
+      const to = nonOwner.address;
+      const value = 0n;
+      const data = "0x";
+
+      const tx = await wallet.connect(owner1).proposeTransaction(to, value, data);
+      const receipt = await tx.wait();
+      expect(receipt?.status).to.equal(1);
+    });
+
+    it("should handle contract calls with data", async function () {
+      // Create a simple contract call (self-call to test)
+      const data = wallet.interface.encodeFunctionData("threshold");
+      const to = await wallet.getAddress();
+
+      const proposeTx = await wallet.connect(owner1).proposeTransaction(to, 0, data);
+      const proposeReceipt = await proposeTx.wait();
+      const proposeEvent = proposeReceipt?.logs.find((log) => {
+        try {
+          return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
+        } catch {
+          return false;
+        }
+      });
+      const proposeParsed = wallet.interface.parseLog(proposeEvent as any);
+      const txHash = proposeParsed?.args[0];
+
+      await wallet.connect(owner1).approveTransaction(txHash);
+      await wallet.connect(owner2).approveTransaction(txHash);
+      await wallet.connect(owner3).executeTransaction(txHash);
+
+      // Transaction should execute successfully
+      const transaction = await wallet.getTransaction(txHash);
+      expect(transaction.executed).to.be.true;
+    });
+
+    it("should handle maximum threshold", async function () {
+      const owners = [owner1.address, owner2.address, owner3.address];
+      const salt = ethers.randomBytes(32);
+      const tx = await factory.connect(owner1).createWallet(owners, 3, salt);
+      const receipt = await tx.wait();
+
+      const event = receipt?.logs.find(
+        (log) => {
+          try {
+            return factory.interface.parseLog(log as any)?.name === "WalletCreated";
+          } catch {
+            return false;
+          }
+        }
+      );
+      const parsedEvent = factory.interface.parseLog(event as any);
+      const walletAddress = parsedEvent?.args[0];
+      const newWallet = await ethers.getContractAt("MultisigWallet", walletAddress) as MultisigWallet;
+
+      expect(await newWallet.threshold()).to.equal(3);
+    });
+
+    it("should handle single owner wallet", async function () {
+      const owners = [owner1.address];
+      const salt = ethers.randomBytes(32);
+      const tx = await factory.connect(owner1).createWallet(owners, 1, salt);
+      const receipt = await tx.wait();
+
+      const event = receipt?.logs.find(
+        (log) => {
+          try {
+            return factory.interface.parseLog(log as any)?.name === "WalletCreated";
+          } catch {
+            return false;
+          }
+        }
+      );
+      const parsedEvent2 = factory.interface.parseLog(event as any);
+      const walletAddress2 = parsedEvent2?.args[0];
+      const newWallet = await ethers.getContractAt("MultisigWallet", walletAddress2) as MultisigWallet;
+
+      expect(await newWallet.threshold()).to.equal(1);
+      
+      // Should be able to execute immediately
+      const to = nonOwner.address;
+      const value = ethers.parseEther("1.0");
+      await owner1.sendTransaction({
+        to: walletAddress2,
+        value: ethers.parseEther("10.0"),
+      });
+
+      const proposeTx = await newWallet.connect(owner1).proposeTransaction(to, value, "0x");
+      const proposeReceipt = await proposeTx.wait();
+      const proposeEvent = proposeReceipt?.logs.find((log) => {
+        try {
+          return newWallet.interface.parseLog(log as any)?.name === "TransactionProposed";
+        } catch {
+          return false;
+        }
+      });
+      const proposeParsed = newWallet.interface.parseLog(proposeEvent as any);
+      const txHash = proposeParsed?.args[0];
+
+      await newWallet.connect(owner1).approveTransaction(txHash);
+      await newWallet.connect(owner1).executeTransaction(txHash);
+
+      const transaction = await newWallet.getTransaction(txHash);
+      expect(transaction.executed).to.be.true;
+    });
+  });
+
   describe("Receive ETH", function () {
     it("should accept ETH transfers", async function () {
       const amount = ethers.parseEther("1.0");

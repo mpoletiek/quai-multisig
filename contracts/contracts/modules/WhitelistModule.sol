@@ -9,24 +9,34 @@ import "../MultisigWallet.sol";
  * @notice Pre-approved addresses can be sent to with reduced friction
  */
 contract WhitelistModule {
-    // Wallet => Address => Whitelisted
+    /// @notice Mapping from wallet to address to whitelist status
     mapping(address => mapping(address => bool)) public whitelist;
 
-    // Wallet => Address => Limit (0 = unlimited)
+    /// @notice Mapping from wallet to address to per-transaction limit (0 = unlimited)
     mapping(address => mapping(address => uint256)) public whitelistLimits;
 
-    // Events
+    /// @notice Emitted when an address is added to the whitelist
+    /// @param wallet Address of the multisig wallet
+    /// @param addr Address being whitelisted
+    /// @param limit Maximum per-transaction amount (0 = unlimited)
     event AddressWhitelisted(
         address indexed wallet,
         address indexed addr,
         uint256 limit
     );
 
+    /// @notice Emitted when an address is removed from the whitelist
+    /// @param wallet Address of the multisig wallet
+    /// @param addr Address being removed
     event AddressRemovedFromWhitelist(
         address indexed wallet,
         address indexed addr
     );
 
+    /// @notice Emitted when a transaction is executed to a whitelisted address
+    /// @param wallet Address of the multisig wallet
+    /// @param to Destination address
+    /// @param value Amount sent in wei
     event WhitelistTransactionExecuted(
         address indexed wallet,
         address indexed to,

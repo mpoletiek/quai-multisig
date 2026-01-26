@@ -191,6 +191,25 @@
           "internalType": "address",
           "name": "wallet",
           "type": "address"
+        }
+      ],
+      "name": "getPendingRecoveryHashes",
+      "outputs": [
+        {
+          "internalType": "bytes32[]",
+          "name": "",
+          "type": "bytes32[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "wallet",
+          "type": "address"
         },
         {
           "internalType": "bytes32",
@@ -220,6 +239,11 @@
             {
               "internalType": "uint256",
               "name": "executionTime",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "requiredThreshold",
               "type": "uint256"
             },
             {
@@ -341,6 +365,25 @@
           "internalType": "address",
           "name": "wallet",
           "type": "address"
+        }
+      ],
+      "name": "hasPendingRecoveries",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "wallet",
+          "type": "address"
         },
         {
           "internalType": "address[]",
@@ -396,6 +439,30 @@
           "type": "address"
         },
         {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "pendingRecoveryHashes",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
           "internalType": "bytes32",
           "name": "",
           "type": "bytes32"
@@ -416,6 +483,11 @@
         {
           "internalType": "uint256",
           "name": "executionTime",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "requiredThreshold",
           "type": "uint256"
         },
         {

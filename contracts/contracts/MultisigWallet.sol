@@ -10,29 +10,54 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
  * @notice This is the implementation contract used by all proxy instances
  */
 contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
-    // Transaction structure
+    /// @notice Structure representing a multisig transaction
+    /// @dev Stores all transaction details including approval state
     struct Transaction {
+        /// @notice Destination address for the transaction
         address to;
+        /// @notice Amount of QUAI to send
         uint256 value;
+        /// @notice Calldata to execute at destination
         bytes data;
+        /// @notice Whether the transaction has been executed
         bool executed;
+        /// @notice Whether the transaction has been cancelled
         bool cancelled;
+        /// @notice Current number of owner approvals
         uint256 numApprovals;
+        /// @notice Block timestamp when transaction was proposed
         uint256 timestamp;
-        address proposer; // Track who proposed the transaction
+        /// @notice Address of the owner who proposed the transaction
+        address proposer;
     }
 
-    // State variables
+    /// @notice Mapping of address to owner status
     mapping(address => bool) public isOwner;
+
+    /// @notice Array of all owner addresses
     address[] public owners;
+
+    /// @notice Number of approvals required to execute a transaction
     uint256 public threshold;
+
+    /// @notice Transaction nonce used for hash generation
     uint256 public nonce;
 
+    /// @notice Mapping of transaction hash to transaction data
     mapping(bytes32 => Transaction) public transactions;
+
+    /// @notice Mapping of transaction hash to owner approvals
     mapping(bytes32 => mapping(address => bool)) public approvals;
+
+    /// @notice Mapping of enabled module addresses
     mapping(address => bool) public modules;
 
-    // Events
+    /// @notice Emitted when a new transaction is proposed
+    /// @param txHash Unique hash identifying the transaction
+    /// @param proposer Address of the owner who proposed the transaction
+    /// @param to Destination address for the transaction
+    /// @param value Amount of QUAI to send
+    /// @param data Calldata to execute at destination
     event TransactionProposed(
         bytes32 indexed txHash,
         address indexed proposer,
@@ -41,59 +66,97 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         bytes data
     );
 
+    /// @notice Emitted when an owner approves a transaction
+    /// @param txHash Hash of the approved transaction
+    /// @param approver Address of the owner who approved
     event TransactionApproved(
         bytes32 indexed txHash,
         address indexed approver
     );
 
+    /// @notice Emitted when a transaction is successfully executed
+    /// @param txHash Hash of the executed transaction
+    /// @param executor Address of the owner who triggered execution
     event TransactionExecuted(
         bytes32 indexed txHash,
         address indexed executor
     );
 
+    /// @notice Emitted when an owner revokes their approval
+    /// @param txHash Hash of the transaction
+    /// @param owner Address of the owner who revoked approval
     event ApprovalRevoked(
         bytes32 indexed txHash,
         address indexed owner
     );
 
+    /// @notice Emitted when a transaction is cancelled
+    /// @param txHash Hash of the cancelled transaction
+    /// @param canceller Address of the owner who cancelled
     event TransactionCancelled(
         bytes32 indexed txHash,
         address indexed canceller
     );
 
+    /// @notice Emitted when a new owner is added to the wallet
+    /// @param owner Address of the new owner
     event OwnerAdded(address indexed owner);
+
+    /// @notice Emitted when an owner is removed from the wallet
+    /// @param owner Address of the removed owner
     event OwnerRemoved(address indexed owner);
+
+    /// @notice Emitted when the approval threshold is changed
+    /// @param threshold New threshold value
     event ThresholdChanged(uint256 threshold);
+
+    /// @notice Emitted when a module is enabled
+    /// @param module Address of the enabled module
     event ModuleEnabled(address indexed module);
+
+    /// @notice Emitted when a module is disabled
+    /// @param module Address of the disabled module
     event ModuleDisabled(address indexed module);
+
+    /// @notice Emitted when the wallet receives QUAI
+    /// @param sender Address that sent the QUAI
+    /// @param amount Amount of QUAI received
     event Received(address indexed sender, uint256 amount);
 
-    // Modifiers
+    /// @notice Restricts function access to wallet owners only
     modifier onlyOwner() {
         require(isOwner[msg.sender], "Not an owner");
         _;
     }
 
+    /// @notice Restricts function access to the wallet itself (for multisig-approved actions)
     modifier onlySelf() {
         require(msg.sender == address(this), "Only self");
         _;
     }
 
+    /// @notice Restricts function access to enabled modules only
     modifier onlyModule() {
         require(modules[msg.sender], "Not an authorized module");
         _;
     }
 
+    /// @notice Ensures the specified transaction exists
+    /// @param txHash Transaction hash to check
     modifier txExists(bytes32 txHash) {
         require(transactions[txHash].to != address(0), "Transaction does not exist");
         _;
     }
 
+    /// @notice Ensures the specified transaction has not been executed
+    /// @param txHash Transaction hash to check
     modifier notExecuted(bytes32 txHash) {
         require(!transactions[txHash].executed, "Transaction already executed");
         _;
     }
 
+    /// @notice Ensures the specified transaction has not been cancelled
+    /// @param txHash Transaction hash to check
     modifier notCancelled(bytes32 txHash) {
         require(!transactions[txHash].cancelled, "Transaction already cancelled");
         _;

@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { useWallet } from '../hooks/useWallet';
 import { useWalletStore } from '../store/walletStore';
 import { Sidebar } from './Sidebar';
+import { DocsSidebar } from './DocsSidebar';
 import { NotificationContainer } from './NotificationContainer';
 
 interface LayoutProps {
@@ -10,13 +10,8 @@ interface LayoutProps {
 }
 
 export function Layout({ children }: LayoutProps) {
-  const { connect, disconnect, connected, address } = useWallet();
   const { error, setError } = useWalletStore();
   const location = useLocation();
-
-  const formatAddress = (addr: string) => {
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-  };
 
   return (
     <div className="min-h-screen bg-vault-black relative">
@@ -89,6 +84,16 @@ export function Layout({ children }: LayoutProps) {
                 >
                   About
                 </Link>
+                <Link
+                  to="/docs"
+                  className={`inline-flex items-center px-4 py-1.5 rounded text-base font-semibold transition-all ${
+                    location.pathname.startsWith('/docs')
+                      ? 'text-primary-400 vault-text-glow'
+                      : 'text-dark-400 hover:text-dark-200'
+                  }`}
+                >
+                  Docs
+                </Link>
                 <a
                   href="https://github.com/mpoletiek/quai-multisig"
                   target="_blank"
@@ -103,36 +108,12 @@ export function Layout({ children }: LayoutProps) {
                 </a>
               </div>
             </div>
-            <div className="flex items-center gap-4">
-              {connected && address ? (
-                <>
-                  <div className="vault-panel px-4 py-1.5 border border-dark-600">
-                    <span className="text-base font-mono text-primary-400 font-semibold">
-                      {formatAddress(address)}
-                    </span>
-                  </div>
-                  <button
-                    onClick={disconnect}
-                    className="btn-secondary"
-                  >
-                    Disconnect
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={connect}
-                  className="btn-primary"
-                >
-                  Connect Wallet
-                </button>
-              )}
-            </div>
           </div>
         </nav>
       </header>
 
       {/* Sidebar - Below top bar, narrow */}
-      <Sidebar />
+      {location.pathname.startsWith('/docs') ? <DocsSidebar /> : <Sidebar />}
 
       {/* Error Banner - Fixed below navbar */}
       {error && (
@@ -174,7 +155,7 @@ export function Layout({ children }: LayoutProps) {
       <NotificationContainer />
 
       {/* Footer */}
-      <footer className="relative z-10 vault-panel border-t-2 border-dark-700 ml-64">
+      <footer className={`relative z-10 vault-panel border-t-2 border-dark-700 ${location.pathname.startsWith('/docs') ? 'ml-64' : 'ml-64'}`}>
         <div className="px-5 py-3">
           <div className="flex flex-col items-center gap-4.5">
             <p className="text-center text-base font-mono text-dark-500 uppercase tracking-wider">

@@ -10,6 +10,8 @@ import {
   CancelTransactionModal,
   RevokeApprovalModal,
 } from '../components/transactionModals';
+import { CopyButton } from '../components/CopyButton';
+import { ExplorerLink } from '../components/ExplorerLink';
 import * as quais from 'quais';
 import type { PendingTransaction } from '../types';
 
@@ -25,7 +27,6 @@ export function LookupTransaction() {
   const [executeModalTx, setExecuteModalTx] = useState<PendingTransaction | null>(null);
   const [cancelModalTx, setCancelModalTx] = useState<PendingTransaction | null>(null);
   const [revokeModalTx, setRevokeModalTx] = useState<PendingTransaction | null>(null);
-  const [copiedHash, setCopiedHash] = useState(false);
 
   const formatAddress = (addr: string) => {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
@@ -236,29 +237,8 @@ export function LookupTransaction() {
                   <p className="text-base font-mono text-primary-400 break-all max-w-[200px] flex-1">
                     {transaction.hash}
                   </p>
-                  <button
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(transaction.hash);
-                        setCopiedHash(true);
-                        setTimeout(() => setCopiedHash(false), 2000);
-                      } catch (err) {
-                        console.error('Failed to copy:', err);
-                      }
-                    }}
-                    className="text-primary-500 hover:text-primary-400 transition-colors p-1 rounded hover:bg-vault-dark-3 flex-shrink-0"
-                    title="Copy full transaction hash"
-                  >
-                    {copiedHash ? (
-                      <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    ) : (
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                    )}
-                  </button>
+                  <CopyButton text={transaction.hash} size="sm" />
+                  <ExplorerLink type="transaction" value={transaction.hash} className="text-xs" />
                 </div>
               </div>
             </div>

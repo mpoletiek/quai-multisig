@@ -9,23 +9,39 @@ import "../MultisigWallet.sol";
  * @notice Allows automatic execution of transactions below the daily limit
  */
 contract DailyLimitModule {
+    /// @notice Structure representing a wallet's daily spending limit
+    /// @dev Reset automatically after 24 hours
     struct DailyLimit {
+        /// @notice Maximum amount that can be spent per day (in wei)
         uint256 limit;
+        /// @notice Amount already spent in current period (in wei)
         uint256 spent;
+        /// @notice Timestamp of last limit reset
         uint256 lastReset;
     }
 
-    // Wallet => DailyLimit
+    /// @notice Mapping from wallet address to its daily limit configuration
     mapping(address => DailyLimit) public dailyLimits;
 
-    // Events
+    /// @notice Emitted when a daily limit is set or updated
+    /// @param wallet Address of the multisig wallet
+    /// @param limit New daily limit in wei
     event DailyLimitSet(address indexed wallet, uint256 limit);
+
+    /// @notice Emitted when a transaction is executed within the daily limit
+    /// @param wallet Address of the multisig wallet
+    /// @param to Destination address
+    /// @param value Amount sent in wei
+    /// @param remainingLimit Remaining daily limit after transaction
     event TransactionExecuted(
         address indexed wallet,
         address indexed to,
         uint256 value,
         uint256 remainingLimit
     );
+
+    /// @notice Emitted when the daily limit is reset
+    /// @param wallet Address of the multisig wallet
     event DailyLimitReset(address indexed wallet);
 
     /**

@@ -8,6 +8,15 @@ import { CreateWallet } from './pages/CreateWallet';
 import { NewTransaction } from './pages/NewTransaction';
 import { TransactionHistory } from './pages/TransactionHistory';
 import { LookupTransaction } from './pages/LookupTransaction';
+import { DocsIndex } from './pages/docs/DocsIndex';
+import { GettingStarted } from './pages/docs/GettingStarted';
+import { MultisigWallets } from './pages/docs/MultisigWallets';
+import { Modules } from './pages/docs/Modules';
+import { SocialRecovery } from './pages/docs/SocialRecovery';
+import { FrontendGuide } from './pages/docs/FrontendGuide';
+import { DeveloperGuide } from './pages/docs/DeveloperGuide';
+import { Security } from './pages/docs/Security';
+import { FAQ } from './pages/docs/FAQ';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +36,15 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/about" element={<About />} />
+            <Route path="/docs" element={<DocsIndex />} />
+            <Route path="/docs/getting-started" element={<GettingStarted />} />
+            <Route path="/docs/multisig-wallets" element={<MultisigWallets />} />
+            <Route path="/docs/modules" element={<Modules />} />
+            <Route path="/docs/modules/social-recovery" element={<SocialRecovery />} />
+            <Route path="/docs/frontend-guide" element={<FrontendGuide />} />
+            <Route path="/docs/developer-guide" element={<DeveloperGuide />} />
+            <Route path="/docs/security" element={<Security />} />
+            <Route path="/docs/faq" element={<FAQ />} />
             <Route path="/create" element={<CreateWallet />} />
             <Route path="/wallet/:address" element={<WalletDetail />} />
             <Route path="/wallet/:address/transaction/new" element={<NewTransaction />} />

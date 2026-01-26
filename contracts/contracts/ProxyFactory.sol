@@ -10,14 +10,21 @@ import "./MultisigWallet.sol";
  * @notice Uses CREATE2 for deterministic addresses
  */
 contract ProxyFactory {
-    // Implementation address
+    /// @notice Address of the MultisigWallet implementation contract
     address public immutable implementation;
 
-    // Registry of deployed wallets
+    /// @notice Array of all deployed wallet addresses
     address[] public deployedWallets;
+
+    /// @notice Mapping to check if an address is a registered wallet
     mapping(address => bool) public isWallet;
 
-    // Events
+    /// @notice Emitted when a new wallet is created through the factory
+    /// @param wallet Address of the newly created wallet
+    /// @param owners Array of owner addresses
+    /// @param threshold Number of required approvals
+    /// @param creator Address that created the wallet
+    /// @param salt Salt used for CREATE2 deployment
     event WalletCreated(
         address indexed wallet,
         address[] owners,
@@ -26,6 +33,9 @@ contract ProxyFactory {
         bytes32 salt
     );
 
+    /// @notice Emitted when an externally deployed wallet is registered
+    /// @param wallet Address of the registered wallet
+    /// @param registrar Address of the owner who registered the wallet
     event WalletRegistered(
         address indexed wallet,
         address indexed registrar

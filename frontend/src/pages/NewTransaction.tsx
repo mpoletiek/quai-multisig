@@ -5,6 +5,7 @@ import { transactionBuilderService } from '../services/TransactionBuilderService
 import { multisigService } from '../services/MultisigService';
 import { Modal } from '../components/Modal';
 import { TransactionFlow } from '../components/TransactionFlow';
+import { TransactionPreview } from '../components/TransactionPreview';
 import * as quais from 'quais';
 
 export function NewTransaction() {
@@ -16,6 +17,7 @@ export function NewTransaction() {
   const [value, setValue] = useState('');
   const [data, setData] = useState('0x');
   const [errors, setErrors] = useState<string[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
   const [showFlow, setShowFlow] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const [isWhitelisted, setIsWhitelisted] = useState<boolean | null>(null);
@@ -188,10 +190,20 @@ export function NewTransaction() {
       return;
     }
 
+    // Show preview first
+    setShowPreview(true);
+    setErrors([]);
+  };
+
+  const handlePreviewConfirm = () => {
+    setShowPreview(false);
     // Show the transaction flow modal
     setShowFlow(true);
     setResetKey(prev => prev + 1);
-    setErrors([]);
+  };
+
+  const handlePreviewCancel = () => {
+    setShowPreview(false);
   };
 
   const handleProposeTransaction = async (onProgress: (progress: any) => void) => {
@@ -503,6 +515,25 @@ export function NewTransaction() {
           </div>
         </div>
       </form>
+
+      {/* Transaction Preview Modal */}
+      <Modal
+        isOpen={showPreview}
+        onClose={handlePreviewCancel}
+        title="Review Transaction"
+        size="lg"
+      >
+        <TransactionPreview
+          to={to}
+          value={value}
+          data={data}
+          walletAddress={walletAddress}
+          onConfirm={handlePreviewConfirm}
+          onCancel={handlePreviewCancel}
+          isWhitelisted={isWhitelisted === true}
+          canUseDailyLimit={canUseDailyLimit === true && (!data || data === '0x')}
+        />
+      </Modal>
 
       {/* Transaction Flow Modal */}
       <Modal

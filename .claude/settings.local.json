@@ -7,7 +7,11 @@
       "Bash(npx hardhat run:*)",
       "Bash(npm run compile:*)",
       "Bash(npx hardhat:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(wc:*)",
+      "Bash(npm run test:run:*)",
+      "Bash(npm test:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

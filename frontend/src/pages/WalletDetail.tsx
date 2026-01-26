@@ -5,6 +5,7 @@ import { useWallet } from '../hooks/useWallet';
 import { TransactionList } from '../components/TransactionList';
 import { OwnerManagement } from '../components/OwnerManagement';
 import { ModuleManagement } from '../components/ModuleManagement';
+import { EmptyState } from '../components/EmptyState';
 import { getBlockRangeTimePeriod } from '../utils/blockTime';
 import * as quais from 'quais';
 
@@ -282,8 +283,8 @@ export function WalletDetail() {
             <p className="mt-3 text-lg text-dark-400 font-semibold">Loading...</p>
           </div>
         ) : !pendingTransactions || pendingTransactions.length === 0 ? (
-          <div className="text-center py-8">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-vault-dark-4 border border-dark-600 mb-3">
+          <EmptyState
+            icon={
               <svg
                 className="w-6 h-6 text-dark-600"
                 fill="none"
@@ -297,9 +298,19 @@ export function WalletDetail() {
                   d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                 />
               </svg>
-            </div>
-            <p className="text-lg text-dark-500 font-semibold">No pending transactions</p>
-          </div>
+            }
+            title="No Pending Transactions"
+            description="All transactions have been processed. Propose a new transaction to get started."
+            action={
+              walletAddress
+                ? {
+                    label: 'Propose Transaction',
+                    to: `/wallet/${walletAddress}/transaction/new`,
+                  }
+                : undefined
+            }
+            className="py-8"
+          />
         ) : (
           <TransactionList
             transactions={pendingTransactions}

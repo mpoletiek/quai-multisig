@@ -9,33 +9,54 @@ import "../MultisigWallet.sol";
  * @notice Allows guardians to recover wallet access
  */
 contract SocialRecoveryModule {
+    /// @notice Configuration for wallet recovery
+    /// @dev Stored per-wallet, set by wallet owners
     struct RecoveryConfig {
+        /// @notice Array of guardian addresses who can initiate/approve recovery
         address[] guardians;
+        /// @notice Number of guardian approvals required to execute recovery
         uint256 threshold;
-        uint256 recoveryPeriod; // Time delay before execution
+        /// @notice Time delay (in seconds) before recovery can be executed
+        uint256 recoveryPeriod;
     }
 
+    /// @notice Represents an initiated recovery process
+    /// @dev Created when a guardian initiates recovery
     struct Recovery {
+        /// @notice New owner addresses after recovery
         address[] newOwners;
+        /// @notice New threshold after recovery
         uint256 newThreshold;
+        /// @notice Number of guardians who have approved this recovery
         uint256 approvalCount;
+        /// @notice Timestamp when recovery can be executed (after time delay)
         uint256 executionTime;
+        /// @notice Threshold required at initiation time (prevents config manipulation attacks)
+        uint256 requiredThreshold;
+        /// @notice Whether this recovery has been executed
         bool executed;
     }
 
-    // Wallet => RecoveryConfig
+    /// @notice Mapping from wallet address to its recovery configuration
     mapping(address => RecoveryConfig) public recoveryConfigs;
 
-    // Wallet => RecoveryHash => Recovery
+    /// @notice Mapping from wallet address to recovery hash to recovery details
     mapping(address => mapping(bytes32 => Recovery)) public recoveries;
 
-    // Wallet => RecoveryHash => Guardian => Approved
+    /// @notice Mapping tracking which guardians have approved which recoveries
     mapping(address => mapping(bytes32 => mapping(address => bool))) public recoveryApprovals;
 
-    // Wallet => Nonce (incremented for each recovery initiation)
+    /// @notice Nonce per wallet to ensure unique recovery hashes
     mapping(address => uint256) public recoveryNonces;
 
-    // Events
+    /// @notice Array of pending recovery hashes per wallet
+    mapping(address => bytes32[]) public pendingRecoveryHashes;
+
+    /// @notice Emitted when recovery is configured for a wallet
+    /// @param wallet Address of the multisig wallet
+    /// @param guardians Array of guardian addresses
+    /// @param threshold Number of approvals required
+    /// @param recoveryPeriod Time delay before execution
     event RecoverySetup(
         address indexed wallet,
         address[] guardians,
@@ -43,6 +64,12 @@ contract SocialRecoveryModule {
         uint256 recoveryPeriod
     );
 
+    /// @notice Emitted when a guardian initiates a recovery process
+    /// @param wallet Address of the multisig wallet
+    /// @param recoveryHash Unique hash identifying this recovery
+    /// @param newOwners Proposed new owner addresses
+    /// @param newThreshold Proposed new threshold
+    /// @param initiator Guardian who initiated the recovery
     event RecoveryInitiated(
         address indexed wallet,
         bytes32 indexed recoveryHash,
@@ -51,17 +78,27 @@ contract SocialRecoveryModule {
         address indexed initiator
     );
 
+    /// @notice Emitted when a guardian approves a recovery
+    /// @param wallet Address of the multisig wallet
+    /// @param recoveryHash Hash of the recovery being approved
+    /// @param guardian Address of the approving guardian
     event RecoveryApproved(
         address indexed wallet,
         bytes32 indexed recoveryHash,
         address indexed guardian
     );
 
+    /// @notice Emitted when a recovery is successfully executed
+    /// @param wallet Address of the multisig wallet
+    /// @param recoveryHash Hash of the executed recovery
     event RecoveryExecuted(
         address indexed wallet,
         bytes32 indexed recoveryHash
     );
 
+    /// @notice Emitted when a recovery is cancelled by a wallet owner
+    /// @param wallet Address of the multisig wallet
+    /// @param recoveryHash Hash of the cancelled recovery
     event RecoveryCancelled(
         address indexed wallet,
         bytes32 indexed recoveryHash
@@ -73,6 +110,7 @@ contract SocialRecoveryModule {
      * @param guardians Array of guardian addresses
      * @param threshold Number of guardian approvals required
      * @param recoveryPeriod Time delay before recovery can be executed
+     * @dev Prevents configuration updates when there are pending recoveries to avoid manipulation attacks
      */
     function setupRecovery(
         address wallet,
@@ -88,6 +126,11 @@ contract SocialRecoveryModule {
             "Invalid threshold"
         );
         require(recoveryPeriod >= 1 days, "Recovery period too short");
+
+        // SECURITY: Prevent configuration updates when there are pending recoveries
+        // This prevents manipulation attacks where an owner changes the threshold
+        // after a recovery is initiated but before it executes
+        require(!hasPendingRecoveries(wallet), "Cannot update config while recoveries are pending");
 
         // Validate guardians
         for (uint256 i = 0; i < guardians.length; i++) {
@@ -145,8 +188,12 @@ contract SocialRecoveryModule {
             newThreshold: newThreshold,
             approvalCount: 0,
             executionTime: block.timestamp + config.recoveryPeriod,
+            requiredThreshold: config.threshold, // Store threshold at initiation time
             executed: false
         });
+
+        // Add to pending recoveries list
+        pendingRecoveryHashes[wallet].push(recoveryHash);
 
         emit RecoveryInitiated(
             wallet,
@@ -191,13 +238,14 @@ contract SocialRecoveryModule {
      * @param recoveryHash Recovery hash
      */
     function executeRecovery(address wallet, bytes32 recoveryHash) external {
-        RecoveryConfig memory config = recoveryConfigs[wallet];
         Recovery storage recovery = recoveries[wallet][recoveryHash];
 
         require(recovery.executionTime != 0, "Recovery not initiated");
         require(!recovery.executed, "Recovery already executed");
+        // SECURITY: Use threshold stored at initiation time, not current config
+        // This prevents manipulation attacks where config is changed mid-recovery
         require(
-            recovery.approvalCount >= config.threshold,
+            recovery.approvalCount >= recovery.requiredThreshold,
             "Not enough approvals"
         );
         require(
@@ -207,15 +255,23 @@ contract SocialRecoveryModule {
 
         recovery.executed = true;
 
+        // Remove from pending recoveries
+        _removePendingRecovery(wallet, recoveryHash);
+
         MultisigWallet multisig = MultisigWallet(payable(wallet));
 
         // Remove old owners and add new owners
+        // Must use execTransactionFromModule since addOwner/removeOwner/changeThreshold have onlySelf modifier
         address[] memory oldOwners = multisig.getOwners();
 
-        // Add new owners
+        // Add new owners first (order matters for threshold validation)
         for (uint256 i = 0; i < recovery.newOwners.length; i++) {
             if (!multisig.isOwner(recovery.newOwners[i])) {
-                multisig.addOwner(recovery.newOwners[i]);
+                bytes memory addOwnerData = abi.encodeWithSelector(
+                    MultisigWallet.addOwner.selector,
+                    recovery.newOwners[i]
+                );
+                multisig.execTransactionFromModule(wallet, 0, addOwnerData);
             }
         }
 
@@ -229,12 +285,20 @@ contract SocialRecoveryModule {
                 }
             }
             if (!keepOwner) {
-                multisig.removeOwner(oldOwners[i]);
+                bytes memory removeOwnerData = abi.encodeWithSelector(
+                    MultisigWallet.removeOwner.selector,
+                    oldOwners[i]
+                );
+                multisig.execTransactionFromModule(wallet, 0, removeOwnerData);
             }
         }
 
         // Update threshold
-        multisig.changeThreshold(recovery.newThreshold);
+        bytes memory changeThresholdData = abi.encodeWithSelector(
+            MultisigWallet.changeThreshold.selector,
+            recovery.newThreshold
+        );
+        multisig.execTransactionFromModule(wallet, 0, changeThresholdData);
 
         emit RecoveryExecuted(wallet, recoveryHash);
     }
@@ -251,6 +315,9 @@ contract SocialRecoveryModule {
         Recovery storage recovery = recoveries[wallet][recoveryHash];
         require(recovery.executionTime != 0, "Recovery not initiated");
         require(!recovery.executed, "Recovery already executed");
+
+        // Remove from pending recoveries
+        _removePendingRecovery(wallet, recoveryHash);
 
         delete recoveries[wallet][recoveryHash];
 
@@ -333,5 +400,52 @@ contract SocialRecoveryModule {
         returns (Recovery memory)
     {
         return recoveries[wallet][recoveryHash];
+    }
+
+    /**
+     * @notice Check if wallet has any pending recoveries
+     * @param wallet Wallet address
+     * @return True if there are pending recoveries
+     */
+    function hasPendingRecoveries(address wallet) public view returns (bool) {
+        bytes32[] memory pending = pendingRecoveryHashes[wallet];
+        for (uint256 i = 0; i < pending.length; i++) {
+            Recovery memory recovery = recoveries[wallet][pending[i]];
+            // Check if recovery exists and is not executed
+            if (recovery.executionTime != 0 && !recovery.executed) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @notice Get all pending recovery hashes for a wallet
+     * @param wallet Wallet address
+     * @return Array of pending recovery hashes
+     */
+    function getPendingRecoveryHashes(address wallet)
+        external
+        view
+        returns (bytes32[] memory)
+    {
+        return pendingRecoveryHashes[wallet];
+    }
+
+    /**
+     * @notice Internal function to remove a recovery from pending list
+     * @param wallet Wallet address
+     * @param recoveryHash Recovery hash to remove
+     */
+    function _removePendingRecovery(address wallet, bytes32 recoveryHash) internal {
+        bytes32[] storage pending = pendingRecoveryHashes[wallet];
+        for (uint256 i = 0; i < pending.length; i++) {
+            if (pending[i] == recoveryHash) {
+                // Move last element to current position and pop
+                pending[i] = pending[pending.length - 1];
+                pending.pop();
+                break;
+            }
+        }
     }
 }

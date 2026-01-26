@@ -2,14 +2,45 @@ import { Link, useLocation } from 'react-router-dom';
 import { useWallet } from '../hooks/useWallet';
 import { useMultisig } from '../hooks/useMultisig';
 import { WalletCard } from './WalletCard';
+import { EmptyState } from './EmptyState';
 
 export function Sidebar() {
-  const { connected } = useWallet();
+  const { connect, disconnect, connected, address } = useWallet();
   const { userWallets, isLoadingWallets, isRefetchingWallets } = useMultisig();
   const location = useLocation();
 
+  const formatAddress = (addr: string) => {
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
+
   return (
     <aside className="fixed left-0 top-[7rem] h-[calc(100vh-7rem)] w-64 bg-vault-dark-2 border-r-2 border-dark-700 flex flex-col z-20 overflow-hidden">
+
+      {/* Wallet Connect/Disconnect */}
+      <div className="px-4 py-4 border-b border-dark-700">
+        {connected && address ? (
+          <div className="space-y-3">
+            <div className="vault-panel px-4 py-2 border border-dark-600">
+              <span className="text-base font-mono text-primary-400 font-semibold">
+                {formatAddress(address)}
+              </span>
+            </div>
+            <button
+              onClick={disconnect}
+              className="btn-secondary w-full"
+            >
+              Disconnect
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={connect}
+            className="btn-primary w-full"
+          >
+            Connect Wallet
+          </button>
+        )}
+      </div>
 
       {/* Quick Actions */}
       {connected && (
@@ -53,26 +84,20 @@ export function Sidebar() {
             <p className="mt-5 text-base text-dark-400 font-semibold">Loading vaults...</p>
           </div>
         ) : !userWallets || userWallets.length === 0 ? (
-          <div className="text-center py-10">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-vault-dark-4 border-2 border-dark-600 mb-5">
+          <EmptyState
+            icon={
               <svg className="w-9 h-9 text-dark-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
               </svg>
-            </div>
-            <p className="text-base text-dark-400 font-semibold mb-2.5">No Vaults</p>
-            <p className="text-base text-dark-600 font-mono mb-5">
-              Create your first vault
-            </p>
-            <Link
-              to="/create"
-              className="btn-primary inline-flex items-center gap-4.5"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Create Vault
-            </Link>
-          </div>
+            }
+            title="No Vaults"
+            description="Create your first multisig vault to get started. Vaults allow you to manage funds securely with multiple owners and configurable approval thresholds."
+            action={{
+              label: 'Create Vault',
+              to: '/create',
+            }}
+            className="py-10"
+          />
         ) : (
           <div className="space-y-3">
             <div className="flex items-center justify-between mb-3 px-1">

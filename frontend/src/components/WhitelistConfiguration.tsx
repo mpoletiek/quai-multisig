@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { multisigService } from '../services/MultisigService';
 import { notificationManager } from './NotificationContainer';
+import { EmptyState } from './EmptyState';
 import * as quais from 'quais';
 
 interface WhitelistConfigurationProps {
@@ -253,15 +254,16 @@ export function WhitelistConfiguration({ walletAddress, onUpdate }: WhitelistCon
           <p className="mt-4 text-base text-dark-400 font-semibold">Loading whitelist...</p>
         </div>
       ) : !whitelistedAddresses || whitelistedAddresses.length === 0 ? (
-        <div className="text-center py-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-vault-dark-4 border-2 border-dark-600 mb-3">
+        <EmptyState
+          icon={
             <svg className="w-6 h-6 text-dark-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
             </svg>
-          </div>
-          <p className="text-base text-dark-500 font-semibold">No addresses whitelisted</p>
-          <p className="text-sm text-dark-600 mt-1">Add addresses above to get started</p>
-        </div>
+          }
+          title="No Whitelisted Addresses"
+          description="Add addresses to the whitelist to enable quick execution of transactions without requiring approvals. Use the form above to add addresses."
+          className="py-8"
+        />
       ) : (
         <div className="space-y-2">
           {whitelistedAddresses.map((entry) => (

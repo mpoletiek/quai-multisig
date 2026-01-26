@@ -23,6 +23,7 @@ const lastNotifiedBalances = new Map<string, string>();
 const notifiedExecutedTxs = new Set<string>();
 const notifiedCancelledTxs = new Set<string>();
 const notifiedReadyTxs = new Set<string>();
+const notifiedProposedTxs = new Set<string>(); // Track transactions we've already notified about being proposed
 
 // Global tracking of notified approvals (to detect when someone else approves)
 const notifiedApprovals = new Map<string, Set<string>>(); // walletAddress -> Set<txHash>
@@ -77,9 +78,6 @@ export function useMultisig(walletAddress?: string) {
     setPendingTransactions,
   } = useWalletStore();
 
-  // Track previous pending transactions count for notifications
-  const [prevPendingCount, setPrevPendingCount] = useState<number>(0); // Used in pending transactions tracking effect
-  
   // Track previous balances for each wallet (using ref to persist across renders)
   const prevBalancesRef = useRef<Map<string, string>>(new Map());
   
@@ -323,8 +321,9 @@ export function useMultisig(walletAddress?: string) {
       const prevTx = prevTxsMap.get(txHashLower);
       
       if (!prevTx) {
-        // New transaction detected (only notify if we had previous transactions)
-        if (prevTxsMap.size > 0) {
+        // New transaction detected (only notify if we had previous transactions and haven't already notified)
+        if (prevTxsMap.size > 0 && !notifiedProposedTxs.has(txHashLower)) {
+          notifiedProposedTxs.add(txHashLower);
           notificationManager.add({
             message: `📝 New transaction proposed: ${tx.hash.slice(0, 10)}...${tx.hash.slice(-6)}`,
             type: 'info',
@@ -416,7 +415,6 @@ export function useMultisig(walletAddress?: string) {
     
     // Update stored state
     prevPendingTxsRef.current.set(walletAddress, currentTxsMap);
-    setPrevPendingCount(pendingTransactions.length);
   }, [pendingTransactions, walletAddress, connectedAddress]);
 
   // Get executed transactions (history)
@@ -556,6 +554,10 @@ export function useMultisig(walletAddress?: string) {
     },
     onSuccess: (txHash) => {
       queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
+      // Mark this transaction as already notified to prevent duplicate notifications from polling
+      if (txHash) {
+        notifiedProposedTxs.add(txHash.toLowerCase());
+      }
       // Show success notification when you propose a transaction
       notificationManager.add({
         message: `Transaction proposed successfully! Hash: ${txHash?.slice(0, 10)}...${txHash?.slice(-6)}`,

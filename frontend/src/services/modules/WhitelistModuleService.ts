@@ -1,0 +1,331 @@
+import * as quais from 'quais';
+import type { Contract, Signer, Provider } from '../../types';
+import { CONTRACT_ADDRESSES } from '../../config/contracts';
+import { BaseService } from '../core/BaseService';
+import {
+  isUserRejection,
+  validateAddress,
+  formatTransactionError,
+} from '../utils/TransactionErrorHandler';
+import {
+  estimateGasWithBuffer,
+  estimateGasOrThrow,
+  buildTxOptions,
+  GasPresets,
+  logGasUsage,
+} from '../utils/GasEstimator';
+import WhitelistModuleABI from '../../config/abi/WhitelistModule.json';
+
+/**
+ * Service for whitelist module operations
+ */
+export class WhitelistModuleService extends BaseService {
+
+  constructor(provider?: Provider) {
+    super(provider);
+  }
+
+  /**
+   * Get whitelist module contract instance
+   */
+  private getModuleContract(signerOrProvider?: Signer | Provider): Contract {
+    const abi = Array.isArray(WhitelistModuleABI) ? WhitelistModuleABI : (WhitelistModuleABI as any).abi;
+    return new quais.Contract(
+      CONTRACT_ADDRESSES.WHITELIST_MODULE,
+      abi,
+      signerOrProvider || this.provider
+    ) as Contract;
+  }
+
+  /**
+   * Add address to whitelist
+   */
+  async addToWhitelist(
+    walletAddress: string,
+    address: string,
+    limit: bigint
+  ): Promise<void> {
+    const signer = this.requireSigner();
+    const normalizedAddress = validateAddress(address);
+    const module = this.getModuleContract(signer);
+
+    // Estimate gas - will throw if validation fails
+    await estimateGasOrThrow(
+      module.addToWhitelist,
+      [walletAddress, normalizedAddress, limit],
+      'add to whitelist',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.addToWhitelist,
+      [walletAddress, normalizedAddress, limit],
+      GasPresets.complex
+    );
+
+    let tx;
+    try {
+      tx = await module.addToWhitelist(walletAddress, normalizedAddress, limit, buildTxOptions(gasLimit));
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    logGasUsage('addToWhitelist', receipt, gasLimit);
+
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted. Possible causes: address already whitelisted or module not enabled.');
+    }
+  }
+
+  /**
+   * Remove address from whitelist
+   */
+  async removeFromWhitelist(walletAddress: string, address: string): Promise<void> {
+    const signer = this.requireSigner();
+    const normalizedAddress = validateAddress(address);
+    const module = this.getModuleContract(signer);
+
+    await estimateGasOrThrow(
+      module.removeFromWhitelist,
+      [walletAddress, normalizedAddress],
+      'remove from whitelist',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.removeFromWhitelist,
+      [walletAddress, normalizedAddress],
+      GasPresets.complex
+    );
+
+    let tx;
+    try {
+      tx = await module.removeFromWhitelist(walletAddress, normalizedAddress, buildTxOptions(gasLimit));
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    logGasUsage('removeFromWhitelist', receipt, gasLimit);
+
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted. Possible causes: address not whitelisted or module not enabled.');
+    }
+  }
+
+  /**
+   * Check if address is whitelisted
+   */
+  async isWhitelisted(walletAddress: string, address: string): Promise<boolean> {
+    const module = this.getModuleContract();
+    return await module.isWhitelisted(walletAddress, address);
+  }
+
+  /**
+   * Get whitelist limit for an address
+   */
+  async getWhitelistLimit(walletAddress: string, address: string): Promise<bigint> {
+    const module = this.getModuleContract();
+    return await module.getWhitelistLimit(walletAddress, address);
+  }
+
+  /**
+   * Execute a transaction to a whitelisted address without requiring approvals
+   */
+  async executeToWhitelist(
+    walletAddress: string,
+    to: string,
+    value: bigint,
+    data: string
+  ): Promise<string> {
+    const signer = this.requireSigner();
+    const normalizedTo = validateAddress(to);
+    const module = this.getModuleContract(signer);
+
+    // Pre-validation
+    const isWhitelisted = await this.isWhitelisted(walletAddress, normalizedTo);
+    if (!isWhitelisted) {
+      throw new Error(`Address ${normalizedTo} is not whitelisted`);
+    }
+
+    const limit = await this.getWhitelistLimit(walletAddress, normalizedTo);
+    if (limit > 0n && value > limit) {
+      throw new Error(`Transaction value ${value.toString()} exceeds whitelist limit ${limit.toString()}`);
+    }
+
+    const walletBalance = await this.provider.getBalance(walletAddress);
+    if (walletBalance < value) {
+      throw new Error(`Insufficient balance: wallet has ${walletBalance.toString()}, trying to send ${value.toString()}`);
+    }
+
+    // Estimate gas
+    await estimateGasOrThrow(
+      module.executeToWhitelist,
+      [walletAddress, normalizedTo, value, data],
+      'execute to whitelist',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.executeToWhitelist,
+      [walletAddress, normalizedTo, value, data],
+      GasPresets.standard
+    );
+
+    let tx;
+    try {
+      tx = await module.executeToWhitelist(walletAddress, normalizedTo, value, data, buildTxOptions(gasLimit));
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted. Possible causes: insufficient balance or module not enabled.');
+    }
+
+    return receipt.hash;
+  }
+
+  /**
+   * Check if a transaction can be executed via whitelist
+   */
+  async canExecuteViaWhitelist(
+    walletAddress: string,
+    to: string,
+    value: bigint
+  ): Promise<{ canExecute: boolean; reason?: string }> {
+    try {
+      if (!quais.isAddress(to)) {
+        return { canExecute: false, reason: 'Invalid address format' };
+      }
+
+      const normalizedTo = quais.getAddress(to);
+      const wallet = this.getWalletContract(walletAddress);
+
+      const isModuleEnabled = await wallet.modules(CONTRACT_ADDRESSES.WHITELIST_MODULE);
+      if (!isModuleEnabled) {
+        return { canExecute: false, reason: 'Whitelist module not enabled' };
+      }
+
+      const isWhitelisted = await this.isWhitelisted(walletAddress, normalizedTo);
+      if (!isWhitelisted) {
+        return { canExecute: false, reason: 'Address not whitelisted' };
+      }
+
+      const limit = await this.getWhitelistLimit(walletAddress, normalizedTo);
+      if (limit > 0n && value > limit) {
+        return { canExecute: false, reason: `Value exceeds whitelist limit of ${limit.toString()}` };
+      }
+
+      const walletBalance = await this.provider.getBalance(walletAddress);
+      if (walletBalance < value) {
+        return { canExecute: false, reason: `Insufficient balance` };
+      }
+
+      return { canExecute: true };
+    } catch (error) {
+      return { canExecute: false, reason: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  /**
+   * Get all whitelisted addresses by querying events
+   */
+  async getWhitelistedAddresses(walletAddress: string): Promise<Array<{ address: string; limit: bigint }>> {
+    const module = this.getModuleContract();
+
+    // Query AddressWhitelisted events
+    const filter = module.filters.AddressWhitelisted(walletAddress);
+    let events: any[] = [];
+
+    try {
+      events = await module.queryFilter(filter, -5000, 'latest');
+    } catch (error: any) {
+      if (error.message?.includes('exceeds maximum limit')) {
+        try {
+          events = await module.queryFilter(filter, -2000, 'latest');
+        } catch {
+          events = [];
+        }
+      }
+    }
+
+    // Query removal events
+    const removalFilter = module.filters.AddressRemovedFromWhitelist(walletAddress);
+    let removalEvents: any[] = [];
+
+    try {
+      removalEvents = await module.queryFilter(removalFilter, -5000, 'latest');
+    } catch (error: any) {
+      if (error.message?.includes('exceeds maximum limit')) {
+        try {
+          removalEvents = await module.queryFilter(removalFilter, -2000, 'latest');
+        } catch {
+          removalEvents = [];
+        }
+      }
+    }
+
+    // Build address map
+    const addressMap = new Map<string, { limit: bigint; blockNumber: number }>();
+    const removedAddresses = new Map<string, number>();
+
+    for (const event of removalEvents) {
+      if (event.args?.addr) {
+        const addr = event.args.addr.toLowerCase();
+        const existing = removedAddresses.get(addr);
+        if (!existing || event.blockNumber > existing) {
+          removedAddresses.set(addr, event.blockNumber);
+        }
+      }
+    }
+
+    for (const event of events) {
+      if (event.args?.addr) {
+        const addr = event.args.addr.toLowerCase();
+        const removalBlock = removedAddresses.get(addr);
+
+        if (!removalBlock || event.blockNumber > removalBlock) {
+          const existing = addressMap.get(addr);
+          if (!existing || event.blockNumber > existing.blockNumber) {
+            addressMap.set(addr, { limit: event.args.limit || 0n, blockNumber: event.blockNumber });
+          }
+        }
+      }
+    }
+
+    // Verify on-chain status
+    const result: Array<{ address: string; limit: bigint }> = [];
+    const verificationPromises: Promise<void>[] = [];
+
+    for (const [address, data] of addressMap.entries()) {
+      const verifyPromise = (async () => {
+        try {
+          const isStillWhitelisted = await this.isWhitelisted(walletAddress, address);
+          if (isStillWhitelisted) {
+            const currentLimit = await this.getWhitelistLimit(walletAddress, address);
+            result.push({ address, limit: currentLimit });
+          }
+        } catch (error) {
+          result.push({ address, limit: data.limit });
+        }
+      })();
+      verificationPromises.push(verifyPromise);
+    }
+
+    await Promise.all(verificationPromises);
+    return result;
+  }
+}

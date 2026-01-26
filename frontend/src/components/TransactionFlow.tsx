@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { parseError } from '../utils/errorMessages';
 
 export type TransactionStep = 
   | 'preparing'
@@ -85,9 +86,10 @@ export function TransactionFlow({
         }, 2000);
       } catch (error: any) {
         console.error('Transaction error:', error);
+        const errorInfo = parseError(error);
         setProgress({
           step: 'error',
-          error: error.message || 'Transaction failed',
+          error: errorInfo.message,
         });
       }
     };

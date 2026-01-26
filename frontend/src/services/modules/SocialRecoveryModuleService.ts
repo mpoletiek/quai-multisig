@@ -1,0 +1,460 @@
+import * as quais from 'quais';
+import type { Contract, Signer, Provider } from '../../types';
+import { CONTRACT_ADDRESSES } from '../../config/contracts';
+import { BaseService } from '../core/BaseService';
+import {
+  isUserRejection,
+  validateAddress,
+  extractErrorMessage,
+} from '../utils/TransactionErrorHandler';
+import {
+  estimateGasWithBuffer,
+  estimateGasOrThrow,
+  buildTxOptions,
+  GasPresets,
+} from '../utils/GasEstimator';
+import SocialRecoveryModuleABI from '../../config/abi/SocialRecoveryModule.json';
+
+export interface RecoveryConfig {
+  guardians: string[];
+  threshold: bigint;
+  recoveryPeriod: bigint;
+}
+
+export interface Recovery {
+  newOwners: string[];
+  newThreshold: bigint;
+  approvalCount: bigint;
+  executionTime: bigint;
+  executed: boolean;
+}
+
+export interface PendingRecovery extends Recovery {
+  recoveryHash: string;
+}
+
+/**
+ * Service for social recovery module operations
+ */
+export class SocialRecoveryModuleService extends BaseService {
+
+  constructor(provider?: Provider) {
+    super(provider);
+  }
+
+  /**
+   * Get social recovery module contract instance
+   */
+  private getModuleContract(signerOrProvider?: Signer | Provider): Contract {
+    const abi = Array.isArray(SocialRecoveryModuleABI) ? SocialRecoveryModuleABI : (SocialRecoveryModuleABI as any).abi;
+    return new quais.Contract(
+      CONTRACT_ADDRESSES.SOCIAL_RECOVERY_MODULE,
+      abi,
+      signerOrProvider || this.provider
+    ) as Contract;
+  }
+
+  /**
+   * Get recovery configuration for a wallet
+   */
+  async getRecoveryConfig(walletAddress: string): Promise<RecoveryConfig> {
+    const module = this.getModuleContract();
+    const config = await module.getRecoveryConfig(walletAddress);
+    return {
+      guardians: config.guardians || [],
+      threshold: config.threshold || 0n,
+      recoveryPeriod: config.recoveryPeriod || 0n,
+    };
+  }
+
+  /**
+   * Setup recovery configuration
+   */
+  async setupRecovery(
+    walletAddress: string,
+    guardians: string[],
+    threshold: number,
+    recoveryPeriodDays: number
+  ): Promise<void> {
+    const signer = this.requireSigner();
+
+    // Validate guardians
+    const normalizedGuardians = guardians.map(addr => validateAddress(addr));
+
+    if (threshold < 1 || threshold > normalizedGuardians.length) {
+      throw new Error(`Invalid threshold: must be between 1 and ${normalizedGuardians.length}`);
+    }
+
+    const recoveryPeriodSeconds = BigInt(recoveryPeriodDays) * 86400n;
+    if (recoveryPeriodSeconds < 86400n) {
+      throw new Error('Recovery period must be at least 1 day');
+    }
+
+    const module = this.getModuleContract(signer);
+
+    await estimateGasOrThrow(
+      module.setupRecovery,
+      [walletAddress, normalizedGuardians, threshold, recoveryPeriodSeconds],
+      'setup recovery',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.setupRecovery,
+      [walletAddress, normalizedGuardians, threshold, recoveryPeriodSeconds],
+      GasPresets.complex
+    );
+
+    let tx;
+    try {
+      tx = await module.setupRecovery(
+        walletAddress,
+        normalizedGuardians,
+        threshold,
+        recoveryPeriodSeconds,
+        buildTxOptions(gasLimit)
+      );
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted. Check guardians, threshold, and recovery period.');
+    }
+  }
+
+  /**
+   * Check if an address is a guardian for a wallet
+   */
+  async isGuardian(walletAddress: string, address: string): Promise<boolean> {
+    const module = this.getModuleContract();
+    return await module.isGuardian(walletAddress, address);
+  }
+
+  /**
+   * Check if an address has approved a recovery
+   */
+  async hasApprovedRecovery(walletAddress: string, recoveryHash: string, address: string): Promise<boolean> {
+    const module = this.getModuleContract();
+
+    console.log(`hasApprovedRecovery: Checking ${address} for recovery ${recoveryHash.slice(0, 10)}...`);
+
+    try {
+      const recovery = await this.getRecovery(walletAddress, recoveryHash);
+
+      if (recovery.executionTime === 0n) {
+        return false;
+      }
+      if (recovery.executed) {
+        return false;
+      }
+    } catch (error) {
+      console.warn('Could not verify recovery state:', error);
+      return false;
+    }
+
+    try {
+      const hasApproved = await module.recoveryApprovals(walletAddress, recoveryHash, address);
+
+      // Double-check for stale approvals
+      const recovery = await this.getRecovery(walletAddress, recoveryHash);
+      if (hasApproved && recovery.approvalCount === 0n) {
+        console.warn('Stale approval detected');
+        return false;
+      }
+
+      return hasApproved;
+    } catch (error) {
+      console.error('Error checking approval status:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get recovery hash for given parameters with current nonce
+   */
+  async getRecoveryHash(
+    walletAddress: string,
+    newOwners: string[],
+    newThreshold: number
+  ): Promise<string> {
+    const module = this.getModuleContract();
+    const normalizedOwners = newOwners.map(addr => quais.getAddress(addr));
+    return await module.getRecoveryHashForCurrentNonce(walletAddress, normalizedOwners, newThreshold);
+  }
+
+  /**
+   * Get recovery details
+   */
+  async getRecovery(walletAddress: string, recoveryHash: string): Promise<Recovery> {
+    const module = this.getModuleContract();
+    const recovery = await module.getRecovery(walletAddress, recoveryHash);
+    return {
+      newOwners: recovery.newOwners || [],
+      newThreshold: recovery.newThreshold || 0n,
+      approvalCount: recovery.approvalCount || 0n,
+      executionTime: recovery.executionTime || 0n,
+      executed: recovery.executed || false,
+    };
+  }
+
+  /**
+   * Initiate recovery (guardians only)
+   */
+  async initiateRecovery(
+    walletAddress: string,
+    newOwners: string[],
+    newThreshold: number
+  ): Promise<string> {
+    const signer = this.requireSigner();
+
+    const normalizedOwners = newOwners.map(addr => validateAddress(addr));
+
+    if (normalizedOwners.length === 0) {
+      throw new Error('At least one new owner is required');
+    }
+    if (newThreshold < 1 || newThreshold > normalizedOwners.length) {
+      throw new Error(`Invalid threshold: must be between 1 and ${normalizedOwners.length}`);
+    }
+
+    const module = this.getModuleContract(signer);
+
+    await estimateGasOrThrow(
+      module.initiateRecovery,
+      [walletAddress, normalizedOwners, newThreshold],
+      'initiate recovery',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.initiateRecovery,
+      [walletAddress, normalizedOwners, newThreshold],
+      GasPresets.complex
+    );
+
+    let tx;
+    try {
+      tx = await module.initiateRecovery(walletAddress, normalizedOwners, newThreshold, buildTxOptions(gasLimit));
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted');
+    }
+
+    // Extract recovery hash from event
+    const recoveryHash = this.extractRecoveryHashFromReceipt(receipt, module);
+    return recoveryHash;
+  }
+
+  /**
+   * Approve recovery (guardians only)
+   */
+  async approveRecovery(walletAddress: string, recoveryHash: string): Promise<void> {
+    const signer = this.requireSigner();
+    const module = this.getModuleContract(signer);
+    const signerAddress = await signer.getAddress();
+
+    // Pre-validation
+    try {
+      const recovery = await this.getRecovery(walletAddress, recoveryHash);
+      if (recovery.executionTime === 0n) {
+        throw new Error('Recovery has been cancelled or does not exist');
+      }
+      if (recovery.executed) {
+        throw new Error('Recovery has already been executed');
+      }
+
+      const hasApproved = await module.recoveryApprovals(walletAddress, recoveryHash, signerAddress);
+      if (hasApproved) {
+        throw new Error('You have already approved this recovery');
+      }
+    } catch (error: any) {
+      if (error.message?.includes('cancelled') || error.message?.includes('already approved')) {
+        throw error;
+      }
+    }
+
+    await estimateGasOrThrow(
+      module.approveRecovery,
+      [walletAddress, recoveryHash],
+      'approve recovery',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.approveRecovery,
+      [walletAddress, recoveryHash],
+      GasPresets.standard
+    );
+
+    let tx;
+    try {
+      tx = await module.approveRecovery(walletAddress, recoveryHash, buildTxOptions(gasLimit));
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted');
+    }
+  }
+
+  /**
+   * Execute recovery (anyone, once conditions met)
+   */
+  async executeRecovery(walletAddress: string, recoveryHash: string): Promise<void> {
+    const signer = this.requireSigner();
+    const module = this.getModuleContract(signer);
+
+    await estimateGasOrThrow(
+      module.executeRecovery,
+      [walletAddress, recoveryHash],
+      'execute recovery',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.executeRecovery,
+      [walletAddress, recoveryHash],
+      { ...GasPresets.complex, minGas: 500000n, maxGas: 2000000n, defaultGas: 1000000n }
+    );
+
+    let tx;
+    try {
+      tx = await module.executeRecovery(walletAddress, recoveryHash, buildTxOptions(gasLimit));
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted');
+    }
+  }
+
+  /**
+   * Cancel recovery (owners only)
+   */
+  async cancelRecovery(walletAddress: string, recoveryHash: string): Promise<void> {
+    const signer = this.requireSigner();
+    const module = this.getModuleContract(signer);
+
+    await estimateGasOrThrow(
+      module.cancelRecovery,
+      [walletAddress, recoveryHash],
+      'cancel recovery',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.cancelRecovery,
+      [walletAddress, recoveryHash],
+      GasPresets.standard
+    );
+
+    let tx;
+    try {
+      tx = await module.cancelRecovery(walletAddress, recoveryHash, buildTxOptions(gasLimit));
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted');
+    }
+  }
+
+  /**
+   * Get all pending recoveries
+   */
+  async getPendingRecoveries(walletAddress: string): Promise<PendingRecovery[]> {
+    const module = this.getModuleContract();
+
+    // Query RecoveryInitiated events
+    const filter = module.filters.RecoveryInitiated(walletAddress);
+    let events: any[] = [];
+
+    try {
+      events = await module.queryFilter(filter, -5000, 'latest');
+    } catch (error: any) {
+      if (error.message?.includes('exceeds maximum limit')) {
+        try {
+          events = await module.queryFilter(filter, -2000, 'latest');
+        } catch {
+          events = [];
+        }
+      }
+    }
+
+    const recoveries: PendingRecovery[] = [];
+    const seenHashes = new Set<string>();
+
+    for (const event of events) {
+      const recoveryHash = event.args?.recoveryHash;
+      if (!recoveryHash) continue;
+
+      const hashLower = recoveryHash.toLowerCase();
+      if (seenHashes.has(hashLower)) continue;
+
+      try {
+        const recovery = await this.getRecovery(walletAddress, recoveryHash);
+
+        // Skip cancelled or executed
+        if (recovery.executionTime === 0n || recovery.executed) continue;
+
+        seenHashes.add(hashLower);
+        recoveries.push({
+          recoveryHash,
+          ...recovery,
+        });
+      } catch (error) {
+        console.error(`Error fetching recovery ${recoveryHash}:`, error);
+      }
+    }
+
+    return recoveries;
+  }
+
+  // ============ Private Helper Methods ============
+
+  /**
+   * Extract recovery hash from receipt
+   */
+  private extractRecoveryHashFromReceipt(receipt: any, module: Contract): string {
+    if (receipt.logs) {
+      for (const log of receipt.logs) {
+        try {
+          const parsedLog = module.interface.parseLog(log);
+          if (parsedLog?.name === 'RecoveryInitiated' && parsedLog.args?.recoveryHash) {
+            return parsedLog.args.recoveryHash;
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+
+    throw new Error('Could not extract recovery hash from transaction events');
+  }
+}

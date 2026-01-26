@@ -7,6 +7,7 @@ let notificationIdCounter = 0;
 class NotificationManager {
   private listeners: Set<(notifications: Notification[]) => void> = new Set();
   private notifications: Notification[] = [];
+  private recentNotifications = new Map<string, number>(); // message -> timestamp for deduplication
 
   subscribe(callback: (notifications: Notification[]) => void) {
     this.listeners.add(callback);
@@ -20,6 +21,25 @@ class NotificationManager {
   }
 
   add(notification: Omit<Notification, 'id' | 'timestamp'>) {
+    // Deduplication: Don't show the same notification within 2 seconds
+    const messageKey = notification.message;
+    const now = Date.now();
+    const lastShown = this.recentNotifications.get(messageKey);
+    
+    if (lastShown && (now - lastShown) < 2000) {
+      // Skip duplicate notification
+      return;
+    }
+    
+    this.recentNotifications.set(messageKey, now);
+    
+    // Clean up old entries (older than 5 seconds)
+    for (const [key, timestamp] of this.recentNotifications.entries()) {
+      if (now - timestamp > 5000) {
+        this.recentNotifications.delete(key);
+      }
+    }
+    
     const newNotification: Notification = {
       ...notification,
       id: `notification-${notificationIdCounter++}`,

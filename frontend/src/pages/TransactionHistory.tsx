@@ -1,24 +1,18 @@
 import { useParams, Link } from 'react-router-dom';
-import { useState } from 'react';
 import { useMultisig } from '../hooks/useMultisig';
 import { decodeTransaction } from '../utils/transactionDecoder';
 import { getBlockRangeTimePeriod } from '../utils/blockTime';
+import { CopyButton } from '../components/CopyButton';
+import { ExplorerLink } from '../components/ExplorerLink';
+import { EmptyState } from '../components/EmptyState';
 import * as quais from 'quais';
 
 export function TransactionHistory() {
   const { address: walletAddress } = useParams<{ address: string }>();
   const { executedTransactions, cancelledTransactions, isLoadingHistory, isLoadingCancelled, refreshHistory, refreshCancelled } = useMultisig(walletAddress);
-  const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
   const formatAddress = (addr: string) => {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-  };
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedHash(text);
-      setTimeout(() => setCopiedHash(null), 2000);
-    });
   };
 
   if (!walletAddress) {
@@ -109,8 +103,8 @@ export function TransactionHistory() {
             <p className="mt-2 text-base font-mono text-dark-600 uppercase tracking-wider">Accessing vault records</p>
           </div>
         ) : !executedTransactions || executedTransactions.length === 0 ? (
-          <div className="text-center py-12">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-vault-dark-4 border-2 border-dark-600 mb-4">
+          <EmptyState
+            icon={
               <svg
                 className="w-8 h-8 text-dark-600"
                 fill="none"
@@ -124,12 +118,18 @@ export function TransactionHistory() {
                   d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                 />
               </svg>
-            </div>
-            <p className="text-lg text-dark-500 font-semibold">No transaction history</p>
-            <p className="text-base text-dark-600 mt-1 font-mono uppercase tracking-wider">
-              Executed transactions will appear here
-            </p>
-          </div>
+            }
+            title="No Transaction History"
+            description="This vault hasn't executed any transactions yet. Once transactions are proposed, approved, and executed, they will appear here."
+            action={
+              walletAddress
+                ? {
+                    label: 'Propose Transaction',
+                    to: `/wallet/${walletAddress}/transaction/new`,
+                  }
+                : undefined
+            }
+          />
         ) : (
           <div className="space-y-4">
             {executedTransactions.map((tx) => {
@@ -173,21 +173,8 @@ export function TransactionHistory() {
                         <p className="text-base font-mono text-dark-500">
                           {formatAddress(tx.hash)}
                         </p>
-                        <button
-                          onClick={() => copyToClipboard(tx.hash)}
-                          className="text-primary-400 hover:text-primary-300 transition-colors p-1 rounded hover:bg-vault-dark-4"
-                          title="Copy full transaction hash"
-                        >
-                          {copiedHash === tx.hash ? (
-                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                          ) : (
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                            </svg>
-                          )}
-                        </button>
+                        <CopyButton text={tx.hash} size="md" />
+                        <ExplorerLink type="transaction" value={tx.hash} className="text-xs" />
                       </div>
                     </div>
                   </div>
@@ -329,21 +316,8 @@ export function TransactionHistory() {
                         <p className="text-base font-mono text-dark-600">
                           {formatAddress(tx.hash)}
                         </p>
-                        <button
-                          onClick={() => copyToClipboard(tx.hash)}
-                          className="text-dark-500 hover:text-dark-400 transition-colors p-1 rounded hover:bg-vault-dark-4"
-                          title="Copy full transaction hash"
-                        >
-                          {copiedHash === tx.hash ? (
-                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                          ) : (
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                            </svg>
-                          )}
-                        </button>
+                        <CopyButton text={tx.hash} size="md" />
+                        <ExplorerLink type="transaction" value={tx.hash} className="text-xs" />
                       </div>
                     </div>
                   </div>
