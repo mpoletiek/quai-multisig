@@ -10,6 +10,9 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
  * @notice This is the implementation contract used by all proxy instances
  */
 contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
+    /// @notice Maximum number of owners allowed (prevents DoS from gas-intensive loops)
+    uint256 public constant MAX_OWNERS = 50;
+
     /// @notice Structure representing a multisig transaction
     /// @dev Stores all transaction details including approval state
     struct Transaction {
@@ -177,6 +180,7 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         uint256 _threshold
     ) external initializer {
         require(_owners.length > 0, "Owners required");
+        require(_owners.length <= MAX_OWNERS, "Too many owners");
         require(
             _threshold > 0 && _threshold <= _owners.length,
             "Invalid threshold"
@@ -246,6 +250,10 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
             proposer: msg.sender
         });
 
+        // Increment nonce on proposal to prevent hash collisions
+        // This ensures each proposal gets a unique hash even if cancelled and re-proposed
+        nonce++;
+
         emit TransactionProposed(txHash, msg.sender, to, value, data);
 
         return txHash;
@@ -268,6 +276,79 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         transactions[txHash].numApprovals++;
 
         emit TransactionApproved(txHash, msg.sender);
+    }
+
+    /**
+     * @notice Approve and execute a transaction in one call if threshold is met
+     * @dev Prevents frontrunning by combining approval and execution atomically
+     * @param txHash Transaction hash to approve and potentially execute
+     * @return executed Whether the transaction was executed
+     */
+    function approveAndExecute(bytes32 txHash)
+        external
+        onlyOwner
+        txExists(txHash)
+        notExecuted(txHash)
+        notCancelled(txHash)
+        nonReentrant
+        returns (bool executed)
+    {
+        // First, approve if not already approved
+        if (!approvals[txHash][msg.sender]) {
+            approvals[txHash][msg.sender] = true;
+            transactions[txHash].numApprovals++;
+            emit TransactionApproved(txHash, msg.sender);
+        }
+
+        // Check if threshold is met
+        Transaction storage transaction = transactions[txHash];
+        if (transaction.numApprovals >= threshold) {
+            // Execute the transaction
+            transaction.executed = true;
+
+            // Handle self-calls (owner management) differently
+            if (transaction.to == address(this)) {
+                bytes4 selector = bytes4(transaction.data);
+
+                if (selector == this.addOwner.selector) {
+                    bytes memory dataSlice = new bytes(transaction.data.length - 4);
+                    for (uint256 i = 4; i < transaction.data.length; i++) {
+                        dataSlice[i - 4] = transaction.data[i];
+                    }
+                    address newOwner = abi.decode(dataSlice, (address));
+                    _addOwner(newOwner);
+                } else if (selector == this.removeOwner.selector) {
+                    bytes memory dataSlice = new bytes(transaction.data.length - 4);
+                    for (uint256 i = 4; i < transaction.data.length; i++) {
+                        dataSlice[i - 4] = transaction.data[i];
+                    }
+                    address ownerToRemove = abi.decode(dataSlice, (address));
+                    _removeOwner(ownerToRemove);
+                } else if (selector == this.changeThreshold.selector) {
+                    bytes memory dataSlice = new bytes(transaction.data.length - 4);
+                    for (uint256 i = 4; i < transaction.data.length; i++) {
+                        dataSlice[i - 4] = transaction.data[i];
+                    }
+                    uint256 newThreshold = abi.decode(dataSlice, (uint256));
+                    _changeThreshold(newThreshold);
+                } else {
+                    (bool success, ) = transaction.to.call{value: transaction.value}(
+                        transaction.data
+                    );
+                    require(success, "Transaction execution failed");
+                }
+            } else {
+                (bool success, ) = transaction.to.call{value: transaction.value}(
+                    transaction.data
+                );
+                require(success, "Transaction execution failed");
+            }
+
+            emit TransactionExecuted(txHash, msg.sender);
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -294,7 +375,6 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         );
 
         transaction.executed = true;
-        nonce++;
 
         // Handle self-calls (owner management) differently to avoid reentrancy guard issues
         if (transaction.to == address(this)) {
@@ -407,6 +487,7 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
     function _addOwner(address owner) internal {
         require(owner != address(0), "Invalid owner address");
         require(!isOwner[owner], "Already an owner");
+        require(owners.length < MAX_OWNERS, "Max owners reached");
 
         isOwner[owner] = true;
         owners.push(owner);
@@ -502,6 +583,9 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
 
     /**
      * @notice Execute transaction from authorized module
+     * @dev Modules cannot call enableModule/disableModule (prevents privilege escalation)
+     *      Owner management functions (addOwner, removeOwner, changeThreshold) are allowed
+     *      for legitimate use cases like social recovery
      * @param to Destination address
      * @param value Amount to send
      * @param data Transaction data
@@ -512,6 +596,18 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         bytes memory data
     ) external onlyModule nonReentrant returns (bool) {
         require(to != address(0), "Invalid destination address");
+
+        // Security: Prevent modules from modifying module permissions
+        // This prevents a compromised module from enabling/disabling other modules
+        // Owner management functions ARE allowed for legitimate recovery scenarios
+        if (to == address(this) && data.length >= 4) {
+            bytes4 selector = bytes4(data);
+            require(
+                selector != this.enableModule.selector &&
+                selector != this.disableModule.selector,
+                "Module cannot modify module permissions"
+            );
+        }
 
         (bool success, ) = to.call{value: value}(data);
         return success;

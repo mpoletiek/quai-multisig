@@ -1,12 +1,16 @@
 import { useParams, Link } from 'react-router-dom';
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useMultisig } from '../hooks/useMultisig';
 import { useWallet } from '../hooks/useWallet';
 import { TransactionList } from '../components/TransactionList';
 import { OwnerManagement } from '../components/OwnerManagement';
 import { ModuleManagement } from '../components/ModuleManagement';
+import { SocialRecoveryManagement } from '../components/SocialRecoveryManagement';
 import { EmptyState } from '../components/EmptyState';
 import { getBlockRangeTimePeriod } from '../utils/blockTime';
+import { multisigService } from '../services/MultisigService';
+import { CONTRACT_ADDRESSES } from '../config/contracts';
 import * as quais from 'quais';
 
 export function WalletDetail() {
@@ -22,6 +26,27 @@ export function WalletDetail() {
     refresh,
   } = useMultisig(walletAddress);
   const [copied, setCopied] = useState(false);
+  const [showRecoveryManagement, setShowRecoveryManagement] = useState(false);
+
+  // Check if connected user is a Social Recovery guardian
+  const { data: isGuardian } = useQuery({
+    queryKey: ['isGuardian', walletAddress, connectedAddress],
+    queryFn: async () => {
+      if (!connectedAddress || !walletAddress) return false;
+      return await multisigService.isGuardian(walletAddress, connectedAddress);
+    },
+    enabled: !!walletAddress && !!connectedAddress,
+  });
+
+  // Check if Social Recovery module is enabled
+  const { data: isSocialRecoveryEnabled } = useQuery({
+    queryKey: ['socialRecoveryEnabled', walletAddress],
+    queryFn: async () => {
+      if (!walletAddress) return false;
+      return await multisigService.isModuleEnabled(walletAddress, CONTRACT_ADDRESSES.SOCIAL_RECOVERY_MODULE);
+    },
+    enabled: !!walletAddress,
+  });
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -186,14 +211,23 @@ export function WalletDetail() {
             {/* Status */}
             <div className="col-span-2">
               <h3 className="text-base font-mono text-dark-500 uppercase tracking-wider mb-1.5">Your Status</h3>
-              {isOwner ? (
-                <span className="inline-flex items-center gap-4.5 text-primary-400 text-lg font-semibold">
-                  <div className="w-1.5 h-1.5 rounded-full bg-primary-600"></div>
-                  Owner
-                </span>
-              ) : (
-                <span className="text-dark-500 text-lg">Not an owner</span>
-              )}
+              <div className="flex flex-wrap gap-2">
+                {isOwner ? (
+                  <span className="inline-flex items-center gap-1.5 text-primary-400 text-lg font-semibold">
+                    <div className="w-1.5 h-1.5 rounded-full bg-primary-600"></div>
+                    Owner
+                  </span>
+                ) : null}
+                {isGuardian && (
+                  <span className="inline-flex items-center gap-1.5 text-blue-400 text-lg font-semibold">
+                    <div className="w-1.5 h-1.5 rounded-full bg-blue-600"></div>
+                    Guardian
+                  </span>
+                )}
+                {!isOwner && !isGuardian && (
+                  <span className="text-dark-500 text-lg">Viewer</span>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -244,6 +278,53 @@ export function WalletDetail() {
       {isOwner && (
         <ModuleManagement
           walletAddress={walletAddress}
+          onUpdate={refresh}
+        />
+      )}
+
+      {/* Guardian Actions - For guardians who are not owners */}
+      {!isOwner && isGuardian && isSocialRecoveryEnabled && (
+        <div className="vault-panel p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-blue-700 to-blue-900 border border-blue-600/50 flex items-center justify-center">
+                <svg className="w-4 h-4 text-blue-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg font-display font-bold text-dark-200">Guardian Actions</h2>
+                <p className="text-base text-dark-500">You are a Social Recovery guardian for this vault</p>
+              </div>
+            </div>
+            <span className="vault-badge text-base border-blue-600/50 text-blue-400 bg-blue-900/30">
+              Guardian
+            </span>
+          </div>
+          <div className="bg-vault-dark-4 rounded-md border border-dark-600 p-4">
+            <p className="text-base text-dark-400 mb-3">
+              As a guardian, you can help recover this vault if the owners lose access.
+              You can initiate recovery, approve pending recoveries, or revoke your approval.
+            </p>
+            <button
+              onClick={() => setShowRecoveryManagement(true)}
+              className="btn-primary text-base px-4 py-2 inline-flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              Manage Social Recovery
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Social Recovery Management Modal for Guardians */}
+      {showRecoveryManagement && (
+        <SocialRecoveryManagement
+          walletAddress={walletAddress}
+          isOpen={showRecoveryManagement}
+          onClose={() => setShowRecoveryManagement(false)}
           onUpdate={refresh}
         />
       )}

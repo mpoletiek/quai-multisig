@@ -22,6 +22,31 @@
           "type": "address"
         }
       ],
+      "name": "RecoveryApprovalRevoked",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "wallet",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "recoveryHash",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "guardian",
+          "type": "address"
+        }
+      ],
       "name": "RecoveryApproved",
       "type": "event"
     },
@@ -569,6 +594,24 @@
         }
       ],
       "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "wallet",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "recoveryHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "revokeRecoveryApproval",
+      "outputs": [],
+      "stateMutability": "nonpayable",
       "type": "function"
     },
     {

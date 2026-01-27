@@ -386,6 +386,58 @@ export class SocialRecoveryModuleService extends BaseService {
   }
 
   /**
+   * Revoke recovery approval (guardians only)
+   * Allows guardians to change their mind before recovery is executed
+   */
+  async revokeRecoveryApproval(walletAddress: string, recoveryHash: string): Promise<void> {
+    const signer = this.requireSigner();
+    const module = this.getModuleContract(signer);
+    const signerAddress = await signer.getAddress();
+
+    // Pre-validation
+    const recovery = await this.getRecovery(walletAddress, recoveryHash);
+    if (recovery.executionTime === 0n) {
+      throw new Error('Recovery has been cancelled or does not exist');
+    }
+    if (recovery.executed) {
+      throw new Error('Recovery has already been executed');
+    }
+
+    const hasApproved = await module.recoveryApprovals(walletAddress, recoveryHash, signerAddress);
+    if (!hasApproved) {
+      throw new Error('You have not approved this recovery');
+    }
+
+    await estimateGasOrThrow(
+      module.revokeRecoveryApproval,
+      [walletAddress, recoveryHash],
+      'revoke recovery approval',
+      module
+    );
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      module.revokeRecoveryApproval,
+      [walletAddress, recoveryHash],
+      GasPresets.standard
+    );
+
+    let tx;
+    try {
+      tx = await module.revokeRecoveryApproval(walletAddress, recoveryHash, buildTxOptions(gasLimit));
+    } catch (error: any) {
+      if (isUserRejection(error)) {
+        throw new Error('Transaction was rejected by user');
+      }
+      throw error;
+    }
+
+    const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Transaction reverted');
+    }
+  }
+
+  /**
    * Get all pending recoveries
    */
   async getPendingRecoveries(walletAddress: string): Promise<PendingRecovery[]> {

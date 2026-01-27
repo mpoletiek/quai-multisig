@@ -209,6 +209,84 @@ export class TransactionService extends BaseService {
   }
 
   /**
+   * Approve and execute a transaction atomically
+   * Prevents frontrunning by combining approval and execution in a single transaction
+   * @returns true if executed, false if only approved (threshold not yet met)
+   */
+  async approveAndExecute(walletAddress: string, txHash: string): Promise<boolean> {
+    const signer = this.requireSigner();
+    const normalizedHash = validateTxHash(txHash);
+    const wallet = this.getWalletContract(walletAddress, signer);
+    const signerAddress = await signer.getAddress();
+
+    // Pre-validation
+    const [txDetails, threshold, isOwner, hasApproved] = await Promise.all([
+      wallet.transactions(normalizedHash),
+      wallet.threshold(),
+      wallet.isOwner(signerAddress),
+      wallet.approvals(normalizedHash, signerAddress),
+    ]);
+
+    const zeroAddress = '0x0000000000000000000000000000000000000000';
+    if (txDetails.to.toLowerCase() === zeroAddress.toLowerCase()) {
+      throw new Error(TransactionErrors.TX_NOT_FOUND);
+    }
+    if (!isOwner) {
+      throw new Error(TransactionErrors.NOT_OWNER);
+    }
+    if (txDetails.executed) {
+      throw new Error(TransactionErrors.TX_ALREADY_EXECUTED);
+    }
+    if (txDetails.cancelled) {
+      throw new Error('Transaction has been cancelled');
+    }
+    if (hasApproved) {
+      throw new Error('You have already approved this transaction');
+    }
+
+    console.log('Approving and potentially executing transaction:', normalizedHash);
+    console.log('  Current approvals:', txDetails.numApprovals.toString());
+    console.log('  Threshold:', threshold.toString());
+
+    const { gasLimit } = await estimateGasWithBuffer(
+      wallet.approveAndExecute,
+      [normalizedHash],
+      GasPresets.complex
+    );
+
+    let tx;
+    try {
+      tx = await wallet.approveAndExecute(normalizedHash, buildTxOptions(gasLimit));
+      console.log('Approve and execute transaction sent:', tx.hash);
+    } catch (error: any) {
+      throw formatTransactionError(error, 'Approve and execute failed', wallet);
+    }
+
+    const receipt = await tx.wait();
+    logGasUsage('approveAndExecute', receipt, gasLimit);
+
+    if (receipt?.status === 0) {
+      throw new Error('Transaction reverted');
+    }
+
+    // Check if transaction was executed by looking for TransactionExecuted event
+    for (const log of receipt.logs || []) {
+      try {
+        const parsed = wallet.interface.parseLog(log);
+        if (parsed?.name === 'TransactionExecuted' && parsed.args?.txHash === normalizedHash) {
+          console.log('Transaction was executed');
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    console.log('Transaction approved but not yet executed (threshold not met)');
+    return false;
+  }
+
+  /**
    * Get transaction details
    */
   async getTransaction(walletAddress: string, txHash: string): Promise<Transaction> {

@@ -288,15 +288,28 @@ describe("MultisigWallet", function () {
       ).to.be.revertedWith("Transaction already executed");
     });
 
-    it("should increment nonce after execution", async function () {
-      const nonceBefore = await wallet.nonce();
+    it("should increment nonce on proposal (not execution)", async function () {
+      // Nonce should already be incremented from the beforeEach proposal
+      const nonceAfterProposal = await wallet.nonce();
+      expect(nonceAfterProposal).to.equal(1n);
 
+      // Execute the transaction
       await wallet.connect(owner1).approveTransaction(txHash);
       await wallet.connect(owner2).approveTransaction(txHash);
       await wallet.connect(owner3).executeTransaction(txHash);
 
-      const nonceAfter = await wallet.nonce();
-      expect(nonceAfter).to.equal(nonceBefore + 1n);
+      // Nonce should NOT change on execution (only on proposal)
+      const nonceAfterExecution = await wallet.nonce();
+      expect(nonceAfterExecution).to.equal(1n);
+
+      // Propose another transaction to verify nonce increments
+      const to = nonOwner.address;
+      const value = ethers.parseEther("0.5");
+      const data = "0x";
+      await wallet.connect(owner1).proposeTransaction(to, value, data);
+
+      const nonceAfterSecondProposal = await wallet.nonce();
+      expect(nonceAfterSecondProposal).to.equal(2n);
     });
   });
 

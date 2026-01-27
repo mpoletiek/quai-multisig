@@ -104,6 +104,16 @@ contract SocialRecoveryModule {
         bytes32 indexed recoveryHash
     );
 
+    /// @notice Emitted when a guardian revokes their approval
+    /// @param wallet Address of the multisig wallet
+    /// @param recoveryHash Hash of the recovery
+    /// @param guardian Address of the guardian who revoked
+    event RecoveryApprovalRevoked(
+        address indexed wallet,
+        bytes32 indexed recoveryHash,
+        address indexed guardian
+    );
+
     /**
      * @notice Set up recovery configuration
      * @param wallet Multisig wallet address
@@ -230,6 +240,33 @@ contract SocialRecoveryModule {
         recoveries[wallet][recoveryHash].approvalCount++;
 
         emit RecoveryApproved(wallet, recoveryHash, msg.sender);
+    }
+
+    /**
+     * @notice Revoke approval for a recovery
+     * @dev Allows guardians to change their mind before recovery is executed
+     * @param wallet Multisig wallet address
+     * @param recoveryHash Recovery hash
+     */
+    function revokeRecoveryApproval(address wallet, bytes32 recoveryHash) external {
+        require(isGuardian(wallet, msg.sender), "Not a guardian");
+        require(
+            recoveries[wallet][recoveryHash].executionTime != 0,
+            "Recovery not initiated"
+        );
+        require(
+            !recoveries[wallet][recoveryHash].executed,
+            "Recovery already executed"
+        );
+        require(
+            recoveryApprovals[wallet][recoveryHash][msg.sender],
+            "Not approved"
+        );
+
+        recoveryApprovals[wallet][recoveryHash][msg.sender] = false;
+        recoveries[wallet][recoveryHash].approvalCount--;
+
+        emit RecoveryApprovalRevoked(wallet, recoveryHash, msg.sender);
     }
 
     /**
