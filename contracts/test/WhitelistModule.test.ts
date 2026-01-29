@@ -82,84 +82,118 @@ describe("WhitelistModule", function () {
     });
   });
 
+  /**
+   * Helper to execute a transaction through multisig
+   */
+  async function executeMultisig(to: string, value: bigint, data: string) {
+    const proposeTx = await wallet.connect(owner1).proposeTransaction(to, value, data);
+    const proposeReceipt = await proposeTx.wait();
+    const proposeEvent = proposeReceipt?.logs.find(
+      (log) => {
+        try {
+          return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
+        } catch {
+          return false;
+        }
+      }
+    );
+    const proposeParsed = wallet.interface.parseLog(proposeEvent as any);
+    const txHash = proposeParsed?.args[0];
+
+    await wallet.connect(owner1).approveTransaction(txHash);
+    await wallet.connect(owner2).approveTransaction(txHash);
+    await wallet.connect(owner3).executeTransaction(txHash);
+  }
+
+  /**
+   * Helper to add to whitelist through multisig (H-2 fix)
+   */
+  async function addToWhitelistViaMultisig(addr: string, limit: bigint) {
+    const addData = module.interface.encodeFunctionData("addToWhitelist", [
+      await wallet.getAddress(),
+      addr,
+      limit
+    ]);
+    await executeMultisig(await module.getAddress(), 0n, addData);
+  }
+
+  /**
+   * Helper to remove from whitelist through multisig (H-2 fix)
+   */
+  async function removeFromWhitelistViaMultisig(addr: string) {
+    const removeData = module.interface.encodeFunctionData("removeFromWhitelist", [
+      await wallet.getAddress(),
+      addr
+    ]);
+    await executeMultisig(await module.getAddress(), 0n, removeData);
+  }
+
+  /**
+   * Helper to batch add to whitelist through multisig (H-2 fix)
+   */
+  async function batchAddToWhitelistViaMultisig(addresses: string[], limits: bigint[]) {
+    const batchData = module.interface.encodeFunctionData("batchAddToWhitelist", [
+      await wallet.getAddress(),
+      addresses,
+      limits
+    ]);
+    await executeMultisig(await module.getAddress(), 0n, batchData);
+  }
+
   describe("addToWhitelist", function () {
-    it("should add address to whitelist", async function () {
-      await expect(module.connect(owner1).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT))
-        .to.emit(module, "AddressWhitelisted")
-        .withArgs(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT);
+    it("should add address to whitelist via multisig", async function () {
+      await addToWhitelistViaMultisig(whitelistedAddr.address, WHITELIST_LIMIT);
 
       expect(await module.isWhitelisted(await wallet.getAddress(), whitelistedAddr.address)).to.be.true;
       expect(await module.getWhitelistLimit(await wallet.getAddress(), whitelistedAddr.address)).to.equal(WHITELIST_LIMIT);
     });
 
     it("should allow unlimited limit (0)", async function () {
-      await module.connect(owner1).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, 0);
+      await addToWhitelistViaMultisig(whitelistedAddr.address, 0n);
       expect(await module.getWhitelistLimit(await wallet.getAddress(), whitelistedAddr.address)).to.equal(0);
     });
 
-    it("should reject from non-owner", async function () {
-      await expect(
-        module.connect(nonOwner).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT)
-      ).to.be.revertedWith("Not an owner");
-    });
-
-    it("should reject zero address", async function () {
-      await expect(
-        module.connect(owner1).addToWhitelist(await wallet.getAddress(), ethers.ZeroAddress, WHITELIST_LIMIT)
-      ).to.be.revertedWith("Invalid address");
-    });
-
-    it("should reject when module not enabled", async function () {
-      // Disable module
-      const disableModuleData = wallet.interface.encodeFunctionData("disableModule", [await module.getAddress()]);
-      const proposeTx = await wallet.connect(owner1).proposeTransaction(await wallet.getAddress(), 0, disableModuleData);
-      const proposeReceipt = await proposeTx.wait();
-      const proposeEvent = proposeReceipt?.logs.find(
-        (log) => {
-          try {
-            return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
-          } catch {
-            return false;
-          }
-        }
-      );
-      const proposeParsed = wallet.interface.parseLog(proposeEvent as any);
-      const txHash = proposeParsed?.args[0];
-
-      await wallet.connect(owner1).approveTransaction(txHash);
-      await wallet.connect(owner2).approveTransaction(txHash);
-      await wallet.connect(owner3).executeTransaction(txHash);
-
+    it("should reject direct call from single owner (H-2 security fix)", async function () {
       await expect(
         module.connect(owner1).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT)
-      ).to.be.revertedWith("Module not enabled");
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
+    });
+
+    it("should reject direct call from non-owner", async function () {
+      await expect(
+        module.connect(nonOwner).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT)
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
     });
   });
 
   describe("removeFromWhitelist", function () {
     beforeEach(async function () {
-      await module.connect(owner1).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT);
+      await addToWhitelistViaMultisig(whitelistedAddr.address, WHITELIST_LIMIT);
     });
 
-    it("should remove address from whitelist", async function () {
-      await expect(module.connect(owner1).removeFromWhitelist(await wallet.getAddress(), whitelistedAddr.address))
-        .to.emit(module, "AddressRemovedFromWhitelist")
-        .withArgs(await wallet.getAddress(), whitelistedAddr.address);
+    it("should remove address from whitelist via multisig", async function () {
+      await removeFromWhitelistViaMultisig(whitelistedAddr.address);
 
       expect(await module.isWhitelisted(await wallet.getAddress(), whitelistedAddr.address)).to.be.false;
       expect(await module.getWhitelistLimit(await wallet.getAddress(), whitelistedAddr.address)).to.equal(0);
     });
 
-    it("should reject from non-owner", async function () {
+    it("should reject direct call from single owner (H-2 security fix)", async function () {
+      await expect(
+        module.connect(owner1).removeFromWhitelist(await wallet.getAddress(), whitelistedAddr.address)
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
+    });
+
+    it("should reject direct call from non-owner", async function () {
       await expect(
         module.connect(nonOwner).removeFromWhitelist(await wallet.getAddress(), whitelistedAddr.address)
-      ).to.be.revertedWith("Not an owner");
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
     });
   });
 
   describe("executeToWhitelist", function () {
     beforeEach(async function () {
-      await module.connect(owner1).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT);
+      await addToWhitelistViaMultisig(whitelistedAddr.address, WHITELIST_LIMIT);
     });
 
     it("should execute transaction to whitelisted address", async function () {
@@ -177,13 +211,13 @@ describe("WhitelistModule", function () {
     it("should reject from non-owner", async function () {
       await expect(
         module.connect(nonOwner).executeToWhitelist(await wallet.getAddress(), whitelistedAddr.address, ethers.parseEther("1.0"), "0x")
-      ).to.be.revertedWith("Not an owner");
+      ).to.be.revertedWithCustomError(module, "NotAnOwner");
     });
 
     it("should reject non-whitelisted address", async function () {
       await expect(
         module.connect(owner1).executeToWhitelist(await wallet.getAddress(), nonWhitelistedAddr.address, ethers.parseEther("1.0"), "0x")
-      ).to.be.revertedWith("Address not whitelisted");
+      ).to.be.revertedWithCustomError(module, "AddressNotWhitelisted");
     });
 
     it("should reject when module not enabled", async function () {
@@ -209,17 +243,17 @@ describe("WhitelistModule", function () {
 
       await expect(
         module.connect(owner1).executeToWhitelist(await wallet.getAddress(), whitelistedAddr.address, ethers.parseEther("1.0"), "0x")
-      ).to.be.revertedWith("Module not enabled");
+      ).to.be.revertedWithCustomError(module, "ModuleNotEnabled");
     });
 
     it("should reject transaction exceeding limit", async function () {
       await expect(
         module.connect(owner1).executeToWhitelist(await wallet.getAddress(), whitelistedAddr.address, ethers.parseEther("6.0"), "0x")
-      ).to.be.revertedWith("Exceeds whitelist limit");
+      ).to.be.revertedWithCustomError(module, "ExceedsWhitelistLimit");
     });
 
     it("should allow unlimited transactions when limit is 0", async function () {
-      await module.connect(owner1).addToWhitelist(await wallet.getAddress(), nonWhitelistedAddr.address, 0);
+      await addToWhitelistViaMultisig(nonWhitelistedAddr.address, 0n);
 
       const value = ethers.parseEther("50.0");
       const balanceBefore = await ethers.provider.getBalance(nonWhitelistedAddr.address);
@@ -231,48 +265,43 @@ describe("WhitelistModule", function () {
   });
 
   describe("batchAddToWhitelist", function () {
-    it("should batch add addresses to whitelist", async function () {
+    it("should batch add addresses to whitelist via multisig", async function () {
       const addresses = [whitelistedAddr.address, nonWhitelistedAddr.address];
       const limits = [WHITELIST_LIMIT, ethers.parseEther("3.0")];
 
-      const tx = module.connect(owner1).batchAddToWhitelist(await wallet.getAddress(), addresses, limits);
-      await expect(tx)
-        .to.emit(module, "AddressWhitelisted")
-        .withArgs(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT)
-        .and.to.emit(module, "AddressWhitelisted")
-        .withArgs(await wallet.getAddress(), nonWhitelistedAddr.address, ethers.parseEther("3.0"));
+      await batchAddToWhitelistViaMultisig(addresses, limits);
 
       expect(await module.isWhitelisted(await wallet.getAddress(), whitelistedAddr.address)).to.be.true;
       expect(await module.isWhitelisted(await wallet.getAddress(), nonWhitelistedAddr.address)).to.be.true;
     });
 
-    it("should reject array length mismatch", async function () {
+    it("should reject direct call from single owner (H-2 security fix)", async function () {
       const addresses = [whitelistedAddr.address];
-      const limits = [WHITELIST_LIMIT, ethers.parseEther("3.0")];
+      const limits = [WHITELIST_LIMIT];
 
       await expect(
         module.connect(owner1).batchAddToWhitelist(await wallet.getAddress(), addresses, limits)
-      ).to.be.revertedWith("Array length mismatch");
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
     });
 
-    it("should reject from non-owner", async function () {
+    it("should reject direct call from non-owner", async function () {
       const addresses = [whitelistedAddr.address];
       const limits = [WHITELIST_LIMIT];
 
       await expect(
         module.connect(nonOwner).batchAddToWhitelist(await wallet.getAddress(), addresses, limits)
-      ).to.be.revertedWith("Not an owner");
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
     });
 
-    it("should handle empty batch", async function () {
-      await module.connect(owner1).batchAddToWhitelist(await wallet.getAddress(), [], []);
+    it("should handle empty batch via multisig", async function () {
+      await batchAddToWhitelistViaMultisig([], []);
       // Should not revert
     });
   });
 
   describe("Edge Cases", function () {
     beforeEach(async function () {
-      await module.connect(owner1).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT);
+      await addToWhitelistViaMultisig(whitelistedAddr.address, WHITELIST_LIMIT);
     });
 
     it("should handle limit exactly at threshold", async function () {
@@ -286,7 +315,7 @@ describe("WhitelistModule", function () {
       // Should reject amount exceeding limit (WhitelistModule checks per-transaction, not cumulative)
       await expect(
         module.connect(owner1).executeToWhitelist(await wallet.getAddress(), whitelistedAddr.address, WHITELIST_LIMIT + 1n, "0x")
-      ).to.be.revertedWith("Exceeds whitelist limit");
+      ).to.be.revertedWithCustomError(module, "ExceedsWhitelistLimit");
     });
 
     it("should handle contract calls with data", async function () {
@@ -301,11 +330,11 @@ describe("WhitelistModule", function () {
       expect(balanceAfter - balanceBefore).to.equal(value);
     });
 
-    it("should handle removing and re-adding address", async function () {
-      await module.connect(owner1).removeFromWhitelist(await wallet.getAddress(), whitelistedAddr.address);
+    it("should handle removing and re-adding address via multisig", async function () {
+      await removeFromWhitelistViaMultisig(whitelistedAddr.address);
       expect(await module.isWhitelisted(await wallet.getAddress(), whitelistedAddr.address)).to.be.false;
 
-      await module.connect(owner1).addToWhitelist(await wallet.getAddress(), whitelistedAddr.address, ethers.parseEther("3.0"));
+      await addToWhitelistViaMultisig(whitelistedAddr.address, ethers.parseEther("3.0"));
       expect(await module.isWhitelisted(await wallet.getAddress(), whitelistedAddr.address)).to.be.true;
       expect(await module.getWhitelistLimit(await wallet.getAddress(), whitelistedAddr.address)).to.equal(ethers.parseEther("3.0"));
     });

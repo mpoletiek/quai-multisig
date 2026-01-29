@@ -18,7 +18,15 @@ async function main() {
   const accounts = networkConfig.accounts as string[];
   const wallet = new quais.Wallet(accounts[0], provider);
 
-  const implementationAddress = "0x001813BB8D3C54BF9Da93aCf873dCb56f41Ad0b4";
+  // Implementation address from env var or command line
+  const implementationAddress = process.env.MULTISIG_IMPLEMENTATION || process.argv[2];
+
+  if (!implementationAddress) {
+    console.error("❌ Implementation address not provided!");
+    console.error("Set MULTISIG_IMPLEMENTATION in .env or pass as argument:");
+    console.error("  npx hardhat run scripts/debug-proxy.ts --network cyprus1 -- <implementation-address>");
+    process.exit(1);
+  }
 
   console.log("Testing direct proxy deployment...");
   console.log("Implementation:", implementationAddress);

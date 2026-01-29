@@ -333,20 +333,13 @@ export function ModuleManagement({ walletAddress, onUpdate }: ModuleManagementPr
 
       {/* Whitelist Configuration Modal */}
       {showWhitelistConfig && (
-        <Modal
-          isOpen={showWhitelistConfig}
-          onClose={() => setShowWhitelistConfig(false)}
-          title="Whitelist Configuration"
-          size="lg"
-        >
-          <WhitelistConfiguration
-            walletAddress={walletAddress}
-            onUpdate={() => {
-              onUpdate();
-              setShowWhitelistConfig(false);
-            }}
-          />
-        </Modal>
+        <WhitelistConfiguration
+          walletAddress={walletAddress}
+          onUpdate={() => {
+            onUpdate();
+            setShowWhitelistConfig(false);
+          }}
+        />
       )}
 
       {/* Daily Limit Configuration Modal */}

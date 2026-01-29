@@ -144,14 +144,8 @@ describe('SocialRecoveryModuleService', () => {
     });
   });
 
-  describe('setupRecovery', () => {
-    beforeEach(() => {
-      service.setSigner(mockSigner);
-    });
-
-    it('should throw when signer not set', async () => {
-      service.setSigner(null);
-
+  describe('setupRecovery (deprecated)', () => {
+    it('should throw deprecation error', async () => {
       await expect(
         service.setupRecovery(
           '0xWallet',
@@ -159,76 +153,7 @@ describe('SocialRecoveryModuleService', () => {
           1,
           1
         )
-      ).rejects.toThrow('Signer not set');
-    });
-
-    it('should throw for invalid guardian address', async () => {
-      await expect(
-        service.setupRecovery('0xWallet', ['invalid'], 1, 1)
-      ).rejects.toThrow('Invalid address');
-    });
-
-    it('should throw for invalid threshold', async () => {
-      await expect(
-        service.setupRecovery(
-          '0xWallet',
-          ['0x0000000000000000000000000000000000000001'],
-          0,
-          1
-        )
-      ).rejects.toThrow('Invalid threshold');
-    });
-
-    it('should throw when threshold exceeds guardian count', async () => {
-      await expect(
-        service.setupRecovery(
-          '0xWallet',
-          ['0x0000000000000000000000000000000000000001'],
-          2,
-          1
-        )
-      ).rejects.toThrow('Invalid threshold');
-    });
-
-    it('should throw when recovery period is less than 1 day', async () => {
-      await expect(
-        service.setupRecovery(
-          '0xWallet',
-          ['0x0000000000000000000000000000000000000001'],
-          1,
-          0
-        )
-      ).rejects.toThrow('Recovery period must be at least 1 day');
-    });
-
-    it('should setup recovery configuration', async () => {
-      await service.setupRecovery(
-        '0xWallet',
-        ['0x0000000000000000000000000000000000000001', '0x0000000000000000000000000000000000000002'],
-        2,
-        7
-      );
-
-      expect(mockModule.setupRecovery).toHaveBeenCalledWith(
-        '0xWallet',
-        expect.arrayContaining([expect.any(String), expect.any(String)]),
-        2,
-        expect.any(BigInt), // 7 days in seconds
-        expect.any(Object)
-      );
-    });
-
-    it('should throw on user rejection', async () => {
-      mockModule.setupRecovery.mockRejectedValue({ code: 'ACTION_REJECTED' });
-
-      await expect(
-        service.setupRecovery(
-          '0xWallet',
-          ['0x0000000000000000000000000000000000000001'],
-          1,
-          1
-        )
-      ).rejects.toThrow('Transaction was rejected by user');
+      ).rejects.toThrow('Direct setupRecovery calls are no longer supported');
     });
   });
 

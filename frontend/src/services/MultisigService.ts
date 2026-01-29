@@ -97,6 +97,27 @@ export class MultisigService {
 
   // ============ Transaction Service Methods ============
 
+  /**
+   * Propose a new multisig transaction
+   *
+   * @param walletAddress - Address of the multisig wallet
+   * @param to - Destination address for the transaction
+   * @param value - Amount of QUAI to send (in wei)
+   * @param data - Encoded transaction data (use TransactionBuilderService to construct)
+   * @returns Transaction hash that can be used to approve/execute the transaction
+   * @throws {Error} If user rejects the transaction or if validation fails
+   *
+   * @example
+   * ```typescript
+   * // Propose a simple transfer
+   * const txHash = await multisigService.proposeTransaction(
+   *   walletAddress,
+   *   recipientAddress,
+   *   ethers.parseEther("1.0"), // 1 QUAI
+   *   "0x" // empty data for simple transfer
+   * );
+   * ```
+   */
   async proposeTransaction(
     walletAddress: string,
     to: string,
@@ -106,18 +127,60 @@ export class MultisigService {
     return this.transactionService.proposeTransaction(walletAddress, to, value, data);
   }
 
+  /**
+   * Approve a pending multisig transaction
+   *
+   * @param walletAddress - Address of the multisig wallet
+   * @param txHash - Transaction hash to approve
+   * @throws {Error} If transaction doesn't exist, is already executed, or user rejects
+   *
+   * @example
+   * ```typescript
+   * await multisigService.approveTransaction(walletAddress, txHash);
+   * // Transaction is now approved by current signer
+   * ```
+   */
   async approveTransaction(walletAddress: string, txHash: string): Promise<void> {
     return this.transactionService.approveTransaction(walletAddress, txHash);
   }
 
+  /**
+   * Revoke approval for a pending transaction
+   *
+   * @param walletAddress - Address of the multisig wallet
+   * @param txHash - Transaction hash to revoke approval for
+   * @throws {Error} If transaction doesn't exist, is already executed, or wasn't approved by caller
+   */
   async revokeApproval(walletAddress: string, txHash: string): Promise<void> {
     return this.transactionService.revokeApproval(walletAddress, txHash);
   }
 
+  /**
+   * Cancel a pending transaction (proposer can cancel immediately, others need threshold approvals)
+   *
+   * @param walletAddress - Address of the multisig wallet
+   * @param txHash - Transaction hash to cancel
+   * @throws {Error} If transaction doesn't exist, is already executed, or caller lacks permission
+   */
   async cancelTransaction(walletAddress: string, txHash: string): Promise<void> {
     return this.transactionService.cancelTransaction(walletAddress, txHash);
   }
 
+  /**
+   * Execute a transaction after threshold approvals are met
+   *
+   * @param walletAddress - Address of the multisig wallet
+   * @param txHash - Transaction hash to execute
+   * @throws {Error} If threshold not met, transaction already executed, or execution fails
+   *
+   * @example
+   * ```typescript
+   * const tx = await multisigService.getTransaction(walletAddress, txHash);
+   * if (tx.numApprovals >= threshold) {
+   *   await multisigService.executeTransaction(walletAddress, txHash);
+   * }
+   * ```
+   */
   async executeTransaction(walletAddress: string, txHash: string): Promise<void> {
     return this.transactionService.executeTransaction(walletAddress, txHash);
   }
@@ -166,12 +229,34 @@ export class MultisigService {
 
   // ============ Whitelist Module Methods ============
 
+  /**
+   * @deprecated Use proposeAddToWhitelist() instead - now requires multisig approval
+   */
   async addToWhitelist(walletAddress: string, address: string, limit: bigint): Promise<void> {
     return this.whitelistService.addToWhitelist(walletAddress, address, limit);
   }
 
+  /**
+   * @deprecated Use proposeRemoveFromWhitelist() instead - now requires multisig approval
+   */
   async removeFromWhitelist(walletAddress: string, address: string): Promise<void> {
     return this.whitelistService.removeFromWhitelist(walletAddress, address);
+  }
+
+  /**
+   * Propose adding address to whitelist (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
+   */
+  async proposeAddToWhitelist(walletAddress: string, address: string, limit: bigint): Promise<string> {
+    return this.whitelistService.proposeAddToWhitelist(walletAddress, address, limit);
+  }
+
+  /**
+   * Propose removing address from whitelist (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
+   */
+  async proposeRemoveFromWhitelist(walletAddress: string, address: string): Promise<string> {
+    return this.whitelistService.proposeRemoveFromWhitelist(walletAddress, address);
   }
 
   async isWhitelisted(walletAddress: string, address: string): Promise<boolean> {
@@ -205,6 +290,9 @@ export class MultisigService {
 
   // ============ Daily Limit Module Methods ============
 
+  /**
+   * @deprecated Use proposeSetDailyLimit() instead - now requires multisig approval
+   */
   async setDailyLimit(walletAddress: string, limit: bigint): Promise<void> {
     return this.dailyLimitService.setDailyLimit(walletAddress, limit);
   }
@@ -213,8 +301,27 @@ export class MultisigService {
     return this.dailyLimitService.getDailyLimit(walletAddress);
   }
 
+  /**
+   * @deprecated Use proposeResetDailyLimit() instead - now requires multisig approval
+   */
   async resetDailyLimit(walletAddress: string): Promise<void> {
     return this.dailyLimitService.resetDailyLimit(walletAddress);
+  }
+
+  /**
+   * Propose setting daily spending limit (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
+   */
+  async proposeSetDailyLimit(walletAddress: string, limit: bigint): Promise<string> {
+    return this.dailyLimitService.proposeSetDailyLimit(walletAddress, limit);
+  }
+
+  /**
+   * Propose resetting daily limit (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
+   */
+  async proposeResetDailyLimit(walletAddress: string): Promise<string> {
+    return this.dailyLimitService.proposeResetDailyLimit(walletAddress);
   }
 
   async getRemainingLimit(walletAddress: string): Promise<bigint> {
@@ -246,6 +353,9 @@ export class MultisigService {
     return this.socialRecoveryService.getRecoveryConfig(walletAddress);
   }
 
+  /**
+   * @deprecated Use proposeSetupRecovery() instead - now requires multisig approval
+   */
   async setupRecovery(
     walletAddress: string,
     guardians: string[],
@@ -253,6 +363,19 @@ export class MultisigService {
     recoveryPeriodDays: number
   ): Promise<void> {
     return this.socialRecoveryService.setupRecovery(walletAddress, guardians, threshold, recoveryPeriodDays);
+  }
+
+  /**
+   * Propose setting up recovery configuration (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
+   */
+  async proposeSetupRecovery(
+    walletAddress: string,
+    guardians: string[],
+    threshold: number,
+    recoveryPeriodDays: number
+  ): Promise<string> {
+    return this.socialRecoveryService.proposeSetupRecovery(walletAddress, guardians, threshold, recoveryPeriodDays);
   }
 
   async isGuardian(walletAddress: string, address: string): Promise<boolean> {

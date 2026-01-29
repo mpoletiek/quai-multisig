@@ -1,6 +1,46 @@
 {
   "abi": [
     {
+      "inputs": [],
+      "name": "AddressNotWhitelisted",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ArrayLengthMismatch",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ExceedsWhitelistLimit",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidAddress",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ModuleNotEnabled",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "MustBeCalledByWallet",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NotAnOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "TransactionFailed",
+      "type": "error"
+    },
+    {
       "anonymous": false,
       "inputs": [
         {

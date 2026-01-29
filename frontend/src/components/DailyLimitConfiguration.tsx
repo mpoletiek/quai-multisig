@@ -45,52 +45,61 @@ export function DailyLimitConfiguration({ walletAddress, onUpdate }: DailyLimitC
     refetchInterval: 60000, // Refetch every minute
   });
 
-  // Set daily limit mutation
-  const setDailyLimit = useMutation({
+  // Propose set daily limit mutation (now creates a multisig proposal)
+  const proposeSetDailyLimit = useMutation({
     mutationFn: async (limit: bigint) => {
-      return await multisigService.setDailyLimit(walletAddress, limit);
+      return await multisigService.proposeSetDailyLimit(walletAddress, limit);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['dailyLimit'] });
-      queryClient.invalidateQueries({ queryKey: ['remainingLimit'] });
-      queryClient.invalidateQueries({ queryKey: ['timeUntilReset'] });
-      refetch();
-      setNewLimit('');
-      setErrors([]);
-      onUpdate();
-    },
-    onError: (error) => {
-      setErrors([error instanceof Error ? error.message : 'Failed to set daily limit']);
-    },
-  });
-
-  // Reset daily limit mutation
-  const resetDailyLimit = useMutation({
-    mutationFn: async () => {
-      return await multisigService.resetDailyLimit(walletAddress);
-    },
-    onSuccess: () => {
+    onSuccess: (txHash) => {
+      const shortHash = `${txHash.slice(0, 10)}...${txHash.slice(-8)}`;
       notificationManager.add({
-        message: '✅ Daily limit reset successfully (spent amount reset to 0)',
+        message: `Proposal created to update daily limit. Requires multisig approval.`,
         type: 'success',
       });
 
       // Browser notification
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification('Daily Limit Reset', {
-          body: 'Daily spent amount has been reset to 0',
+        new Notification('Daily Limit Proposal Created', {
+          body: `Proposal ${shortHash} requires multisig approval`,
           icon: '/vite.svg',
         });
       }
 
-      queryClient.invalidateQueries({ queryKey: ['dailyLimit'] });
-      queryClient.invalidateQueries({ queryKey: ['remainingLimit'] });
-      queryClient.invalidateQueries({ queryKey: ['timeUntilReset'] });
-      refetch();
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
+      setNewLimit('');
+      setErrors([]);
       onUpdate();
     },
     onError: (error) => {
-      setErrors([error instanceof Error ? error.message : 'Failed to reset daily limit']);
+      setErrors([error instanceof Error ? error.message : 'Failed to create proposal']);
+    },
+  });
+
+  // Propose reset daily limit mutation (now creates a multisig proposal)
+  const proposeResetDailyLimit = useMutation({
+    mutationFn: async () => {
+      return await multisigService.proposeResetDailyLimit(walletAddress);
+    },
+    onSuccess: (txHash) => {
+      const shortHash = `${txHash.slice(0, 10)}...${txHash.slice(-8)}`;
+      notificationManager.add({
+        message: `Proposal created to reset daily limit. Requires multisig approval.`,
+        type: 'success',
+      });
+
+      // Browser notification
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        new Notification('Daily Limit Reset Proposal Created', {
+          body: `Proposal ${shortHash} requires multisig approval`,
+          icon: '/vite.svg',
+        });
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
+      onUpdate();
+    },
+    onError: (error) => {
+      setErrors([error instanceof Error ? error.message : 'Failed to create proposal']);
     },
   });
 
@@ -117,28 +126,28 @@ export function DailyLimitConfiguration({ walletAddress, onUpdate }: DailyLimitC
 
     try {
       const parsedLimit = transactionBuilderService.parseValue(newLimit);
-      await setDailyLimit.mutateAsync(parsedLimit);
+      await proposeSetDailyLimit.mutateAsync(parsedLimit);
     } catch (err: any) {
-      setErrors([err.message || 'Failed to set daily limit']);
+      setErrors([err.message || 'Failed to create proposal']);
     }
   };
 
   const handleReset = async () => {
-    if (!confirm('Are you sure you want to reset the daily limit? This will reset the spent amount to 0.')) {
+    if (!confirm('Are you sure you want to propose resetting the daily limit? This will create a proposal that requires multisig approval.')) {
       return;
     }
 
     try {
-      await resetDailyLimit.mutateAsync();
+      await proposeResetDailyLimit.mutateAsync();
     } catch (err: any) {
-      setErrors([err.message || 'Failed to reset daily limit']);
+      setErrors([err.message || 'Failed to create proposal']);
     }
   };
 
   const formatTime = (seconds: bigint): string => {
     const secs = Number(seconds);
     if (secs === 0) return 'Reset';
-    
+
     const hours = Math.floor(secs / 3600);
     const minutes = Math.floor((secs % 3600) / 60);
     const remainingSecs = secs % 60;
@@ -160,6 +169,21 @@ export function DailyLimitConfiguration({ walletAddress, onUpdate }: DailyLimitC
       size="lg"
     >
       <div className="space-y-6">
+        {/* Multisig Approval Notice */}
+        <div className="bg-gradient-to-r from-blue-900/90 via-blue-800/90 to-blue-900/90 border-l-4 border-blue-600 rounded-md p-4">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            </svg>
+            <div>
+              <h4 className="text-base font-semibold text-blue-200 mb-1">Multisig Approval Required</h4>
+              <p className="text-sm text-blue-200/90">
+                Changes to the daily limit configuration now require multisig approval. When you set or reset the limit, a proposal will be created that other owners must approve before it takes effect.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Important Warning */}
         <div className="bg-gradient-to-r from-yellow-900/90 via-yellow-800/90 to-yellow-900/90 border-l-4 border-yellow-600 rounded-md p-4">
           <div className="flex items-start gap-3">
@@ -229,7 +253,7 @@ export function DailyLimitConfiguration({ walletAddress, onUpdate }: DailyLimitC
         {/* Set New Limit */}
         <div>
           <h3 className="text-base font-mono text-dark-500 uppercase tracking-wider mb-4">
-            {dailyLimit && dailyLimit.limit > 0n ? 'Update Daily Limit' : 'Set Daily Limit'}
+            {dailyLimit && dailyLimit.limit > 0n ? 'Propose Limit Update' : 'Propose Daily Limit'}
           </h3>
           <div className="space-y-4">
             <div>
@@ -252,42 +276,42 @@ export function DailyLimitConfiguration({ walletAddress, onUpdate }: DailyLimitC
             <div className="flex gap-3">
               <button
                 onClick={handleSetLimit}
-                disabled={setDailyLimit.isPending}
+                disabled={proposeSetDailyLimit.isPending}
                 className="btn-primary flex-1 text-base px-4 py-2.5 inline-flex items-center justify-center gap-2"
               >
-                {setDailyLimit.isPending ? (
+                {proposeSetDailyLimit.isPending ? (
                   <>
                     <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-                    Setting Limit...
+                    Creating Proposal...
                   </>
                 ) : (
                   <>
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
-                    {dailyLimit && dailyLimit.limit > 0n ? 'Update Limit' : 'Set Limit'}
+                    {dailyLimit && dailyLimit.limit > 0n ? 'Propose Update' : 'Propose Limit'}
                   </>
                 )}
               </button>
               {dailyLimit && dailyLimit.limit > 0n && (
                 <button
                   onClick={async () => {
-                    if (!confirm('Are you sure you want to disable the daily limit? This will set the limit to 0.')) {
+                    if (!confirm('Are you sure you want to propose disabling the daily limit? This will create a proposal that requires multisig approval.')) {
                       return;
                     }
                     try {
-                      await setDailyLimit.mutateAsync(0n);
+                      await proposeSetDailyLimit.mutateAsync(0n);
                     } catch (err: any) {
-                      setErrors([err.message || 'Failed to disable daily limit']);
+                      setErrors([err.message || 'Failed to create proposal']);
                     }
                   }}
-                  disabled={setDailyLimit.isPending}
+                  disabled={proposeSetDailyLimit.isPending}
                   className="btn-secondary text-base px-4 py-2.5 inline-flex items-center justify-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
-                  Disable
+                  Propose Disable
                 </button>
               )}
             </div>
@@ -297,26 +321,26 @@ export function DailyLimitConfiguration({ walletAddress, onUpdate }: DailyLimitC
         {/* Reset Limit */}
         {dailyLimit && dailyLimit.limit > 0n && dailyLimit.spent > 0n && (
           <div>
-            <h3 className="text-base font-mono text-dark-500 uppercase tracking-wider mb-4">Reset Daily Limit</h3>
+            <h3 className="text-base font-mono text-dark-500 uppercase tracking-wider mb-4">Propose Reset Daily Limit</h3>
             <p className="text-sm text-dark-500 mb-4">
-              Manually reset the spent amount to 0. The limit will automatically reset after 24 hours.
+              Propose resetting the spent amount to 0. The limit will automatically reset after 24 hours. This requires multisig approval.
             </p>
             <button
               onClick={handleReset}
-              disabled={resetDailyLimit.isPending}
+              disabled={proposeResetDailyLimit.isPending}
               className="btn-secondary w-full text-base px-4 py-2.5 inline-flex items-center justify-center gap-2"
             >
-              {resetDailyLimit.isPending ? (
+              {proposeResetDailyLimit.isPending ? (
                 <>
                   <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-                  Resetting...
+                  Creating Proposal...
                 </>
               ) : (
                 <>
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  Reset Spent Amount
+                  Propose Reset Spent Amount
                 </>
               )}
             </button>

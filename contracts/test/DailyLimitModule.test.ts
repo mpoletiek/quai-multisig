@@ -82,11 +82,53 @@ describe("DailyLimitModule", function () {
     });
   });
 
+  /**
+   * Helper to execute a transaction through multisig
+   */
+  async function executeMultisig(to: string, value: bigint, data: string) {
+    const proposeTx = await wallet.connect(owner1).proposeTransaction(to, value, data);
+    const proposeReceipt = await proposeTx.wait();
+    const proposeEvent = proposeReceipt?.logs.find(
+      (log) => {
+        try {
+          return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
+        } catch {
+          return false;
+        }
+      }
+    );
+    const proposeParsed = wallet.interface.parseLog(proposeEvent as any);
+    const txHash = proposeParsed?.args[0];
+
+    await wallet.connect(owner1).approveTransaction(txHash);
+    await wallet.connect(owner2).approveTransaction(txHash);
+    await wallet.connect(owner3).executeTransaction(txHash);
+  }
+
+  /**
+   * Helper to set daily limit through multisig (H-2 fix)
+   */
+  async function setDailyLimitViaMultisig(limit: bigint) {
+    const setLimitData = module.interface.encodeFunctionData("setDailyLimit", [
+      await wallet.getAddress(),
+      limit
+    ]);
+    await executeMultisig(await module.getAddress(), 0n, setLimitData);
+  }
+
+  /**
+   * Helper to reset daily limit through multisig (H-2 fix)
+   */
+  async function resetDailyLimitViaMultisig() {
+    const resetData = module.interface.encodeFunctionData("resetDailyLimit", [
+      await wallet.getAddress()
+    ]);
+    await executeMultisig(await module.getAddress(), 0n, resetData);
+  }
+
   describe("setDailyLimit", function () {
-    it("should set daily limit", async function () {
-      await expect(module.connect(owner1).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT))
-        .to.emit(module, "DailyLimitSet")
-        .withArgs(await wallet.getAddress(), DAILY_LIMIT);
+    it("should set daily limit via multisig", async function () {
+      await setDailyLimitViaMultisig(DAILY_LIMIT);
 
       const limit = await module.getDailyLimit(await wallet.getAddress());
       expect(limit.limit).to.equal(DAILY_LIMIT);
@@ -94,42 +136,23 @@ describe("DailyLimitModule", function () {
       expect(limit.lastReset).to.be.greaterThan(0);
     });
 
-    it("should reject from non-owner", async function () {
-      await expect(
-        module.connect(nonOwner).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT)
-      ).to.be.revertedWith("Not an owner");
-    });
-
-    it("should reject when module not enabled", async function () {
-      // Disable module
-      const disableModuleData = wallet.interface.encodeFunctionData("disableModule", [await module.getAddress()]);
-      const proposeTx = await wallet.connect(owner1).proposeTransaction(await wallet.getAddress(), 0, disableModuleData);
-      const proposeReceipt = await proposeTx.wait();
-      const proposeEvent = proposeReceipt?.logs.find(
-        (log) => {
-          try {
-            return wallet.interface.parseLog(log as any)?.name === "TransactionProposed";
-          } catch {
-            return false;
-          }
-        }
-      );
-      const proposeParsed = wallet.interface.parseLog(proposeEvent as any);
-      const txHash = proposeParsed?.args[0];
-
-      await wallet.connect(owner1).approveTransaction(txHash);
-      await wallet.connect(owner2).approveTransaction(txHash);
-      await wallet.connect(owner3).executeTransaction(txHash);
-
+    it("should reject direct call from single owner (H-2 security fix)", async function () {
+      // Single owner cannot directly call setDailyLimit anymore
       await expect(
         module.connect(owner1).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT)
-      ).to.be.revertedWith("Module not enabled");
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
+    });
+
+    it("should reject direct call from non-owner", async function () {
+      await expect(
+        module.connect(nonOwner).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT)
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
     });
   });
 
   describe("executeBelowLimit", function () {
     beforeEach(async function () {
-      await module.connect(owner1).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT);
+      await setDailyLimitViaMultisig(DAILY_LIMIT);
     });
 
     it("should execute transaction below limit", async function () {
@@ -149,13 +172,13 @@ describe("DailyLimitModule", function () {
     it("should reject from non-owner", async function () {
       await expect(
         module.connect(nonOwner).executeBelowLimit(await wallet.getAddress(), recipient.address, ethers.parseEther("1.0"))
-      ).to.be.revertedWith("Not an owner");
+      ).to.be.revertedWithCustomError(module, "NotAnOwner");
     });
 
     it("should reject zero address destination", async function () {
       await expect(
         module.connect(owner1).executeBelowLimit(await wallet.getAddress(), ethers.ZeroAddress, ethers.parseEther("1.0"))
-      ).to.be.revertedWith("Invalid destination");
+      ).to.be.revertedWithCustomError(module, "InvalidDestination");
     });
 
     it("should reject when limit not set", async function () {
@@ -201,13 +224,13 @@ describe("DailyLimitModule", function () {
 
       await expect(
         module.connect(owner1).executeBelowLimit(newWalletAddress, recipient.address, ethers.parseEther("1.0"))
-      ).to.be.revertedWith("Daily limit not set");
+      ).to.be.revertedWithCustomError(module, "DailyLimitNotSet");
     });
 
     it("should reject transaction exceeding limit", async function () {
       await expect(
         module.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, ethers.parseEther("11.0"))
-      ).to.be.revertedWith("Exceeds daily limit");
+      ).to.be.revertedWithCustomError(module, "ExceedsDailyLimit");
     });
 
     it("should track cumulative spending", async function () {
@@ -240,29 +263,33 @@ describe("DailyLimitModule", function () {
 
   describe("resetDailyLimit", function () {
     beforeEach(async function () {
-      await module.connect(owner1).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT);
+      await setDailyLimitViaMultisig(DAILY_LIMIT);
       await module.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, ethers.parseEther("5.0"));
     });
 
-    it("should reset daily limit", async function () {
-      await expect(module.connect(owner1).resetDailyLimit(await wallet.getAddress()))
-        .to.emit(module, "DailyLimitReset")
-        .withArgs(await wallet.getAddress());
+    it("should reset daily limit via multisig", async function () {
+      await resetDailyLimitViaMultisig();
 
       const limit = await module.getDailyLimit(await wallet.getAddress());
       expect(limit.spent).to.equal(0);
     });
 
-    it("should reject from non-owner", async function () {
+    it("should reject direct call from single owner (H-2 security fix)", async function () {
+      await expect(
+        module.connect(owner1).resetDailyLimit(await wallet.getAddress())
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
+    });
+
+    it("should reject direct call from non-owner", async function () {
       await expect(
         module.connect(nonOwner).resetDailyLimit(await wallet.getAddress())
-      ).to.be.revertedWith("Not an owner");
+      ).to.be.revertedWithCustomError(module, "MustBeCalledByWallet");
     });
   });
 
   describe("getRemainingLimit", function () {
     beforeEach(async function () {
-      await module.connect(owner1).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT);
+      await setDailyLimitViaMultisig(DAILY_LIMIT);
     });
 
     it("should return full limit when nothing spent", async function () {
@@ -296,21 +323,21 @@ describe("DailyLimitModule", function () {
 
   describe("Edge Cases", function () {
     it("should handle limit exactly at threshold", async function () {
-      await module.connect(owner1).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT);
+      await setDailyLimitViaMultisig(DAILY_LIMIT);
       await module.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, DAILY_LIMIT);
-      
+
       const limit = await module.getDailyLimit(await wallet.getAddress());
       expect(limit.spent).to.equal(DAILY_LIMIT);
-      
+
       // Should reject any additional spending
       await expect(
         module.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, 1)
-      ).to.be.revertedWith("Exceeds daily limit");
+      ).to.be.revertedWithCustomError(module, "ExceedsDailyLimit");
     });
 
     it("should handle multiple transactions summing to limit", async function () {
-      await module.connect(owner1).setDailyLimit(await wallet.getAddress(), DAILY_LIMIT);
-      
+      await setDailyLimitViaMultisig(DAILY_LIMIT);
+
       await module.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, ethers.parseEther("3.0"));
       await module.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, ethers.parseEther("4.0"));
       await module.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, ethers.parseEther("3.0"));
@@ -320,11 +347,11 @@ describe("DailyLimitModule", function () {
     });
 
     it("should handle zero limit", async function () {
-      await module.connect(owner1).setDailyLimit(await wallet.getAddress(), 0);
-      
+      await setDailyLimitViaMultisig(0n);
+
       await expect(
         module.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, 1)
-      ).to.be.revertedWith("Daily limit not set");
+      ).to.be.revertedWithCustomError(module, "DailyLimitNotSet");
     });
   });
 });

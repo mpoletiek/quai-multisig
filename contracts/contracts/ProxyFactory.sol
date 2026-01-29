@@ -10,13 +10,24 @@ import "./MultisigWallet.sol";
  * @notice Uses CREATE2 for deterministic addresses
  */
 contract ProxyFactory {
+    // Custom errors (gas efficient)
+    error InvalidImplementationAddress();
+    error OwnersRequired();
+    error InvalidThreshold();
+    error InvalidWalletAddress();
+    error WalletAlreadyRegistered();
+    error CallerIsNotAnOwner();
+
     /// @notice Address of the MultisigWallet implementation contract
+    /// @dev Immutable for security - prevents factory from being used to deploy with malicious implementation
     address public immutable implementation;
 
     /// @notice Array of all deployed wallet addresses
+    /// @dev Grows unbounded - for large deployments, consider off-chain indexing via WalletCreated events
     address[] public deployedWallets;
 
     /// @notice Mapping to check if an address is a registered wallet
+    /// @dev O(1) lookup for wallet verification, prevents duplicate registrations
     mapping(address => bool) public isWallet;
 
     /// @notice Emitted when a new wallet is created through the factory
@@ -46,7 +57,7 @@ contract ProxyFactory {
      * @param _implementation Address of the MultisigWallet implementation
      */
     constructor(address _implementation) {
-        require(_implementation != address(0), "Invalid implementation address");
+        if (_implementation == address(0)) revert InvalidImplementationAddress();
         implementation = _implementation;
     }
 
@@ -62,11 +73,8 @@ contract ProxyFactory {
         uint256 threshold,
         bytes32 salt
     ) external returns (address wallet) {
-        require(owners.length > 0, "Owners required");
-        require(
-            threshold > 0 && threshold <= owners.length,
-            "Invalid threshold"
-        );
+        if (owners.length == 0) revert OwnersRequired();
+        if (threshold == 0 || threshold > owners.length) revert InvalidThreshold();
 
         // Encode initialization data
         bytes memory initData = abi.encodeWithSelector(
@@ -96,13 +104,13 @@ contract ProxyFactory {
      * @param wallet Address of the wallet to register
      */
     function registerWallet(address wallet) external {
-        require(wallet != address(0), "Invalid wallet address");
-        require(!isWallet[wallet], "Wallet already registered");
+        if (wallet == address(0)) revert InvalidWalletAddress();
+        if (isWallet[wallet]) revert WalletAlreadyRegistered();
 
         MultisigWallet multisig = MultisigWallet(payable(wallet));
 
         // Verify caller is an owner of the wallet
-        require(multisig.isOwner(msg.sender), "Caller is not an owner");
+        if (!multisig.isOwner(msg.sender)) revert CallerIsNotAnOwner();
 
         // Register wallet
         deployedWallets.push(wallet);

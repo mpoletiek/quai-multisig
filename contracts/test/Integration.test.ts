@@ -72,9 +72,12 @@ describe("Integration Tests", function () {
     });
   });
 
-  async function enableModule(moduleAddress: string) {
-    const enableModuleData = wallet.interface.encodeFunctionData("enableModule", [moduleAddress]);
-    const proposeTx = await wallet.connect(owner1).proposeTransaction(await wallet.getAddress(), 0, enableModuleData);
+  /**
+   * Helper to execute a transaction through multisig
+   * Proposes, approves, and executes in one call
+   */
+  async function executeMultisig(to: string, value: bigint, data: string) {
+    const proposeTx = await wallet.connect(owner1).proposeTransaction(to, value, data);
     const proposeReceipt = await proposeTx.wait();
     const proposeEvent = proposeReceipt?.logs.find(
       (log) => {
@@ -91,6 +94,47 @@ describe("Integration Tests", function () {
     await wallet.connect(owner1).approveTransaction(txHash);
     await wallet.connect(owner2).approveTransaction(txHash);
     await wallet.connect(owner3).executeTransaction(txHash);
+  }
+
+  async function enableModule(moduleAddress: string) {
+    const enableModuleData = wallet.interface.encodeFunctionData("enableModule", [moduleAddress]);
+    await executeMultisig(await wallet.getAddress(), 0n, enableModuleData);
+  }
+
+  /**
+   * Helper to set daily limit through multisig (H-2 fix)
+   */
+  async function setDailyLimitViaMultisig(limit: bigint) {
+    const setLimitData = dailyLimitModule.interface.encodeFunctionData("setDailyLimit", [
+      await wallet.getAddress(),
+      limit
+    ]);
+    await executeMultisig(await dailyLimitModule.getAddress(), 0n, setLimitData);
+  }
+
+  /**
+   * Helper to add address to whitelist through multisig (H-2 fix)
+   */
+  async function addToWhitelistViaMultisig(addr: string, limit: bigint) {
+    const addData = whitelistModule.interface.encodeFunctionData("addToWhitelist", [
+      await wallet.getAddress(),
+      addr,
+      limit
+    ]);
+    await executeMultisig(await whitelistModule.getAddress(), 0n, addData);
+  }
+
+  /**
+   * Helper to setup social recovery through multisig (H-2 fix)
+   */
+  async function setupRecoveryViaMultisig(guardians: string[], threshold: number, recoveryPeriod: number) {
+    const setupData = socialRecoveryModule.interface.encodeFunctionData("setupRecovery", [
+      await wallet.getAddress(),
+      guardians,
+      threshold,
+      recoveryPeriod
+    ]);
+    await executeMultisig(await socialRecoveryModule.getAddress(), 0n, setupData);
   }
 
   describe("Factory → Wallet → Modules Flow", function () {
@@ -110,28 +154,49 @@ describe("Integration Tests", function () {
       expect(await wallet.modules(await dailyLimitModule.getAddress())).to.be.true;
       expect(await wallet.modules(await whitelistModule.getAddress())).to.be.true;
 
-      // Use DailyLimitModule
-      await dailyLimitModule.connect(owner1).setDailyLimit(await wallet.getAddress(), ethers.parseEther("10.0"));
+      // Use DailyLimitModule (H-2 fix: configuration now requires multisig approval)
+      await setDailyLimitViaMultisig(ethers.parseEther("10.0"));
       const balanceBefore1 = await ethers.provider.getBalance(recipient.address);
+      // Execution still works with single owner (as intended)
       await dailyLimitModule.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, ethers.parseEther("5.0"));
 
       const balanceAfter1 = await ethers.provider.getBalance(recipient.address);
       expect(balanceAfter1 - balanceBefore1).to.equal(ethers.parseEther("5.0"));
 
-      // Use WhitelistModule
-      await whitelistModule.connect(owner1).addToWhitelist(await wallet.getAddress(), recipient.address, ethers.parseEther("3.0"));
+      // Use WhitelistModule (H-2 fix: configuration now requires multisig approval)
+      await addToWhitelistViaMultisig(recipient.address, ethers.parseEther("3.0"));
       const balanceBefore2 = await ethers.provider.getBalance(recipient.address);
+      // Execution still works with single owner (as intended)
       await whitelistModule.connect(owner1).executeToWhitelist(await wallet.getAddress(), recipient.address, ethers.parseEther("2.0"), "0x");
 
       const balanceAfter2 = await ethers.provider.getBalance(recipient.address);
       expect(balanceAfter2 - balanceBefore2).to.equal(ethers.parseEther("2.0"));
 
-      // Setup SocialRecoveryModule
+      // Setup SocialRecoveryModule (H-2 fix: configuration now requires multisig approval)
       const guardians = [guardian1.address, guardian2.address];
-      await socialRecoveryModule.connect(owner1).setupRecovery(await wallet.getAddress(), guardians, 2, 1 * 24 * 60 * 60);
-      
+      await setupRecoveryViaMultisig(guardians, 2, 1 * 24 * 60 * 60);
+
       const config = await socialRecoveryModule.getRecoveryConfig(await wallet.getAddress());
       expect(config.guardians).to.deep.equal(guardians);
+    });
+
+    it("should reject direct module configuration by single owner (H-2 security fix)", async function () {
+      await enableModule(await dailyLimitModule.getAddress());
+      await enableModule(await whitelistModule.getAddress());
+      await enableModule(await socialRecoveryModule.getAddress());
+
+      // Single owner should NOT be able to configure modules directly
+      await expect(
+        dailyLimitModule.connect(owner1).setDailyLimit(await wallet.getAddress(), ethers.parseEther("10.0"))
+      ).to.be.revertedWithCustomError(dailyLimitModule, "MustBeCalledByWallet");
+
+      await expect(
+        whitelistModule.connect(owner1).addToWhitelist(await wallet.getAddress(), recipient.address, 0)
+      ).to.be.revertedWithCustomError(whitelistModule, "MustBeCalledByWallet");
+
+      await expect(
+        socialRecoveryModule.connect(owner1).setupRecovery(await wallet.getAddress(), [guardian1.address], 1, 86400)
+      ).to.be.revertedWithCustomError(socialRecoveryModule, "MustBeCalledByWallet");
     });
   });
 
@@ -142,18 +207,18 @@ describe("Integration Tests", function () {
     });
 
     it("should allow using multiple modules together", async function () {
-      // Set daily limit
-      await dailyLimitModule.connect(owner1).setDailyLimit(await wallet.getAddress(), ethers.parseEther("10.0"));
+      // Set daily limit (through multisig)
+      await setDailyLimitViaMultisig(ethers.parseEther("10.0"));
 
-      // Add to whitelist
-      await whitelistModule.connect(owner1).addToWhitelist(await wallet.getAddress(), recipient.address, ethers.parseEther("5.0"));
+      // Add to whitelist (through multisig)
+      await addToWhitelistViaMultisig(recipient.address, ethers.parseEther("5.0"));
 
       const balanceBefore = await ethers.provider.getBalance(recipient.address);
 
-      // Execute via daily limit
+      // Execute via daily limit (single owner OK)
       await dailyLimitModule.connect(owner1).executeBelowLimit(await wallet.getAddress(), recipient.address, ethers.parseEther("3.0"));
 
-      // Execute via whitelist
+      // Execute via whitelist (single owner OK)
       await whitelistModule.connect(owner1).executeToWhitelist(await wallet.getAddress(), recipient.address, ethers.parseEther("2.0"), "0x");
 
       const balanceAfter = await ethers.provider.getBalance(recipient.address);
@@ -165,12 +230,59 @@ describe("Integration Tests", function () {
     beforeEach(async function () {
       await enableModule(await socialRecoveryModule.getAddress());
       const guardians = [guardian1.address, guardian2.address];
-      await socialRecoveryModule.connect(owner1).setupRecovery(await wallet.getAddress(), guardians, 2, 1 * 24 * 60 * 60);
+      // Setup recovery through multisig (H-2 fix)
+      await setupRecoveryViaMultisig(guardians, 2, 1 * 24 * 60 * 60);
     });
 
-    it("should complete full recovery flow", async function () {
+    it("should complete full recovery flow (H-1 verification)", async function () {
+      // This test verifies H-1: that execTransactionFromModule correctly
+      // calls owner management functions on the wallet
       const newOwners = [guardian1.address, guardian2.address];
-      
+
+      // Initiate recovery
+      const tx = await socialRecoveryModule.connect(guardian1).initiateRecovery(await wallet.getAddress(), newOwners, 2);
+      const receipt = await tx.wait();
+      const event = receipt?.logs.find(
+        (log) => {
+          try {
+            return socialRecoveryModule.interface.parseLog(log as any)?.name === "RecoveryInitiated";
+          } catch {
+            return false;
+          }
+        }
+      );
+      const parsedEvent = socialRecoveryModule.interface.parseLog(event as any);
+      const recoveryHash = parsedEvent?.args[1];
+
+      // Approve recovery
+      await socialRecoveryModule.connect(guardian1).approveRecovery(await wallet.getAddress(), recoveryHash);
+      await socialRecoveryModule.connect(guardian2).approveRecovery(await wallet.getAddress(), recoveryHash);
+
+      // Fast forward time
+      await time.increase(1 * 24 * 60 * 60 + 1);
+
+      // Execute recovery - this uses execTransactionFromModule to call
+      // addOwner, removeOwner, and changeThreshold on the wallet
+      await socialRecoveryModule.connect(guardian1).executeRecovery(await wallet.getAddress(), recoveryHash);
+
+      // Verify owners changed - this proves execTransactionFromModule works correctly
+      const owners = await wallet.getOwners();
+      expect(owners).to.have.lengthOf(2);
+      expect(owners).to.include.members(newOwners);
+      expect(await wallet.threshold()).to.equal(2);
+
+      // Verify old owners are removed
+      expect(owners).to.not.include(owner1.address);
+      expect(owners).to.not.include(owner2.address);
+      expect(owners).to.not.include(owner3.address);
+    });
+
+    it("should handle partial owner replacement via execTransactionFromModule (H-1)", async function () {
+      // Test case where some old owners remain and some are replaced
+      // This validates the execTransactionFromModule pattern handles both
+      // adding new owners and removing old ones
+      const newOwners = [owner1.address, guardian1.address]; // Keep owner1, add guardian1
+
       // Initiate recovery
       const tx = await socialRecoveryModule.connect(guardian1).initiateRecovery(await wallet.getAddress(), newOwners, 2);
       const receipt = await tx.wait();
@@ -196,10 +308,13 @@ describe("Integration Tests", function () {
       // Execute recovery
       await socialRecoveryModule.connect(guardian1).executeRecovery(await wallet.getAddress(), recoveryHash);
 
-      // Verify owners changed
+      // Verify owner state
       const owners = await wallet.getOwners();
       expect(owners).to.have.lengthOf(2);
-      expect(owners).to.include.members(newOwners);
+      expect(owners).to.include(owner1.address); // Kept
+      expect(owners).to.include(guardian1.address); // Added
+      expect(owners).to.not.include(owner2.address); // Removed
+      expect(owners).to.not.include(owner3.address); // Removed
       expect(await wallet.threshold()).to.equal(2);
     });
   });

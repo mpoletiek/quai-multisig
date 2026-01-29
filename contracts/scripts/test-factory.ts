@@ -19,8 +19,18 @@ async function main() {
 
   console.log("Using wallet:", wallet.address);
 
-  // Factory address from your deployment
-  const factoryAddress = "0x004DB8c5e4a264A800A76Ac46127DB781C4d0E4E";
+  // Factory address from env var or command line
+  const factoryAddress = process.env.PROXY_FACTORY || process.argv[2];
+
+  if (!factoryAddress) {
+    console.error("❌ Factory address not provided!");
+    console.error("Set PROXY_FACTORY in .env or pass as argument:");
+    console.error("  npx hardhat run scripts/test-factory.ts --network cyprus1 -- <factory-address>");
+    process.exit(1);
+  }
+
+  console.log("Factory address:", factoryAddress);
+  console.log();
 
   const factory = new quais.Contract(
     factoryAddress,

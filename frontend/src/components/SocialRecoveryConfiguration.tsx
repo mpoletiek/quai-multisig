@@ -54,33 +54,31 @@ export function SocialRecoveryConfiguration({ walletAddress, onUpdate }: SocialR
     }
   }, [recoveryConfig]);
 
-  // Setup recovery mutation
-  const setupRecovery = useMutation({
+  // Propose setup recovery mutation (now creates a multisig proposal)
+  const proposeSetupRecovery = useMutation({
     mutationFn: async ({ guardians, threshold, recoveryPeriodDays }: { guardians: string[]; threshold: number; recoveryPeriodDays: number }) => {
-      return await multisigService.setupRecovery(walletAddress, guardians, threshold, recoveryPeriodDays);
+      return await multisigService.proposeSetupRecovery(walletAddress, guardians, threshold, recoveryPeriodDays);
     },
-    onSuccess: () => {
+    onSuccess: (txHash) => {
+      const shortHash = `${txHash.slice(0, 10)}...${txHash.slice(-8)}`;
       notificationManager.add({
-        message: `✅ Social Recovery configuration updated successfully`,
+        message: `Proposal created to update recovery configuration. Requires multisig approval.`,
         type: 'success',
       });
 
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification('Social Recovery Configured', {
-          body: 'Recovery configuration has been updated',
+        new Notification('Recovery Configuration Proposal Created', {
+          body: `Proposal ${shortHash} requires multisig approval`,
           icon: '/vite.svg',
         });
       }
 
-      queryClient.invalidateQueries({ queryKey: ['recoveryConfig', walletAddress] });
-      // Wait a bit for the transaction to be mined
-      setTimeout(() => {
-        refetch();
-      }, 2000);
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
       setErrors([]);
+      onUpdate();
     },
     onError: (error) => {
-      setErrors([error instanceof Error ? error.message : 'Failed to setup recovery']);
+      setErrors([error instanceof Error ? error.message : 'Failed to create proposal']);
     },
   });
 
@@ -151,7 +149,7 @@ export function SocialRecoveryConfiguration({ walletAddress, onUpdate }: SocialR
     }
 
     const validGuardians = guardians.filter(g => g.trim() !== '');
-    setupRecovery.mutate({ guardians: validGuardians, threshold, recoveryPeriodDays });
+    proposeSetupRecovery.mutate({ guardians: validGuardians, threshold, recoveryPeriodDays });
   };
 
   const formatRecoveryPeriod = (seconds: bigint): string => {
@@ -168,6 +166,21 @@ export function SocialRecoveryConfiguration({ walletAddress, onUpdate }: SocialR
       size="lg"
     >
       <div className="space-y-6">
+        {/* Multisig Approval Notice */}
+        <div className="bg-gradient-to-r from-green-900/90 via-green-800/90 to-green-900/90 border-l-4 border-green-600 rounded-md p-4">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+            </svg>
+            <div>
+              <h4 className="text-base font-semibold text-green-200 mb-1">Multisig Approval Required</h4>
+              <p className="text-sm text-green-200/90">
+                Changes to the recovery configuration now require multisig approval. When you setup or update guardians, a proposal will be created that other owners must approve before it takes effect.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Important Information */}
         <div className="bg-gradient-to-r from-blue-900/90 via-blue-800/90 to-blue-900/90 border-l-4 border-blue-600 rounded-md p-4">
           <div className="flex items-start gap-3">
@@ -226,7 +239,7 @@ export function SocialRecoveryConfiguration({ walletAddress, onUpdate }: SocialR
         {/* Setup/Update Configuration */}
         <div>
           <h3 className="text-base font-mono text-dark-500 uppercase tracking-wider mb-4">
-            {recoveryConfig && recoveryConfig.guardians.length > 0 ? 'Update Configuration' : 'Setup Recovery'}
+            {recoveryConfig && recoveryConfig.guardians.length > 0 ? 'Propose Configuration Update' : 'Propose Setup Recovery'}
           </h3>
           {pendingRecoveries && pendingRecoveries.length > 0 && (
             <div className="mb-4 bg-gradient-to-r from-yellow-900/90 via-yellow-800/90 to-yellow-900/90 border-l-4 border-yellow-600 rounded-md p-3">
@@ -304,7 +317,7 @@ export function SocialRecoveryConfiguration({ walletAddress, onUpdate }: SocialR
                 className="input-field w-full"
               />
               <p className="mt-2 text-sm font-mono text-dark-600">
-                {guardians.filter(g => g.trim() !== '').length > 0 
+                {guardians.filter(g => g.trim() !== '').length > 0
                   ? `Requires ${threshold} of ${guardians.filter(g => g.trim() !== '').length} guardian approvals`
                   : 'Add guardians first'}
               </p>
@@ -332,7 +345,7 @@ export function SocialRecoveryConfiguration({ walletAddress, onUpdate }: SocialR
               <div className="bg-gradient-to-r from-primary-900/90 via-primary-800/90 to-primary-900/90 border-l-4 border-primary-600 rounded-md p-3 shadow-red-glow">
                 <ul className="text-sm text-primary-200 space-y-1">
                   {errors.map((error, index) => (
-                    <li key={index} className="font-medium">• {error}</li>
+                    <li key={index} className="font-medium">{error}</li>
                   ))}
                 </ul>
               </div>
@@ -341,20 +354,20 @@ export function SocialRecoveryConfiguration({ walletAddress, onUpdate }: SocialR
             {/* Submit Button */}
             <button
               onClick={handleSetup}
-              disabled={setupRecovery.isPending || (pendingRecoveries && pendingRecoveries.length > 0)}
+              disabled={proposeSetupRecovery.isPending || (pendingRecoveries && pendingRecoveries.length > 0)}
               className="btn-primary w-full text-base px-4 py-2.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {setupRecovery.isPending ? (
+              {proposeSetupRecovery.isPending ? (
                 <>
                   <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-                  Setting up...
+                  Creating Proposal...
                 </>
               ) : (
                 <>
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
-                  {recoveryConfig && recoveryConfig.guardians.length > 0 ? 'Update Configuration' : 'Setup Recovery'}
+                  {recoveryConfig && recoveryConfig.guardians.length > 0 ? 'Propose Update' : 'Propose Setup'}
                 </>
               )}
             </button>

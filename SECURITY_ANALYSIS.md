@@ -15,7 +15,7 @@ This security analysis covers the Quai Network multisig wallet smart contracts. 
 | Severity | Count | Status |
 |----------|-------|--------|
 | Critical | 0 | - |
-| High | 2 | Open |
+| High | 2 | **All Fixed** |
 | Medium | 5 | **All Fixed** |
 | Low | 6 | Open |
 | Informational | 4 | Open |
@@ -24,43 +24,42 @@ This security analysis covers the Quai Network multisig wallet smart contracts. 
 
 ## Findings
 
-### HIGH SEVERITY
+### HIGH SEVERITY (ALL FIXED)
 
-#### H-1: SocialRecoveryModule `execTransactionFromModule` Calls Target Wallet Instead of `address(this)`
+#### H-1: SocialRecoveryModule `execTransactionFromModule` Calls Target Wallet Instead of `address(this)` ✅ VERIFIED
 
-**File:** [SocialRecoveryModule.sol:270-301](contracts/contracts/modules/SocialRecoveryModule.sol#L270-L301)
+**File:** [SocialRecoveryModule.sol:270-341](contracts/contracts/modules/SocialRecoveryModule.sol#L270-L341)
 
 **Description:**
-In `executeRecovery()`, the module calls `multisig.execTransactionFromModule(wallet, 0, addOwnerData)` where the first parameter is `wallet`. However, `execTransactionFromModule` expects `to` (destination), `value`, and `data`. The call is sending the encoded `addOwner` data TO the wallet address instead of calling `addOwner` ON the wallet.
+In `executeRecovery()`, the module calls `multisig.execTransactionFromModule(wallet, 0, addOwnerData)` where the first parameter is `wallet`. The pattern is that `execTransactionFromModule` does a low-level call to the wallet address with the encoded function call data.
 
-The issue is that `execTransactionFromModule` does a low-level call:
-```solidity
-(bool success, ) = to.call{value: value}(data);
-```
+**Verification:**
+Integration tests added to verify this pattern works correctly:
+- `should complete full recovery flow (H-1 verification)` - Tests complete owner replacement
+- `should handle partial owner replacement via execTransactionFromModule (H-1)` - Tests mixed owner retention/replacement
 
-This means the module is calling the wallet's `addOwner(address)` function externally, but `addOwner` has `onlySelf` modifier which requires `msg.sender == address(this)`. Since `msg.sender` would be the wallet itself (calling externally), this should work. However, the pattern is confusing and error-prone.
-
-**Recommendation:**
-Verify this pattern works correctly in integration tests. Consider adding explicit documentation or refactoring to make the call pattern clearer.
+The pattern works because when the wallet executes `wallet.call(data)`, it's calling itself, so `msg.sender == address(this)` passes the `onlySelf` modifier on `addOwner`, `removeOwner`, and `changeThreshold`.
 
 ---
 
-#### H-2: Single Owner Can Bypass Multisig for Module Operations
+#### H-2: Single Owner Can Bypass Multisig for Module Operations ✅ FIXED
 
-**File:** [DailyLimitModule.sol:52-65](contracts/contracts/modules/DailyLimitModule.sol#L52-L65), [WhitelistModule.sol:52-66](contracts/contracts/modules/WhitelistModule.sol#L52-L66)
+**File:** [DailyLimitModule.sol:52-65](contracts/contracts/modules/DailyLimitModule.sol#L52-L65), [WhitelistModule.sol:52-66](contracts/contracts/modules/WhitelistModule.sol#L52-L66), [SocialRecoveryModule.sol:125-161](contracts/contracts/modules/SocialRecoveryModule.sol#L125-L161)
 
 **Description:**
-`setDailyLimit()`, `addToWhitelist()`, and other module configuration functions only require `isOwner(msg.sender)` check, meaning ANY single owner can configure these modules without multisig approval. This defeats the purpose of a multisig wallet for critical configuration changes.
+`setDailyLimit()`, `addToWhitelist()`, `setupRecovery()` and other module configuration functions only required `isOwner(msg.sender)` check, allowing ANY single owner to configure modules without multisig approval.
 
-For example, a single malicious owner could:
-1. Set the daily limit to the wallet's entire balance
-2. Whitelist their own address with unlimited limit
-3. Drain the wallet using module execution functions
+**Fix Applied:**
+Changed access control from `require(multisig.isOwner(msg.sender), "Not an owner")` to `require(msg.sender == wallet, "Must be called by wallet")` for all configuration functions:
 
-**Recommendation:**
-Module configuration should require multisig approval. Either:
-1. Require these functions to be called through `execTransactionFromModule` (making them `onlySelf` equivalent)
-2. Or create proposal/approval flow within the modules themselves
+- `DailyLimitModule.setDailyLimit()` - Now requires multisig approval
+- `DailyLimitModule.resetDailyLimit()` - Now requires multisig approval
+- `WhitelistModule.addToWhitelist()` - Now requires multisig approval
+- `WhitelistModule.removeFromWhitelist()` - Now requires multisig approval
+- `WhitelistModule.batchAddToWhitelist()` - Now requires multisig approval
+- `SocialRecoveryModule.setupRecovery()` - Now requires multisig approval
+
+**Note:** Execution functions like `executeBelowLimit()` and `executeToWhitelist()` remain callable by single owners as intended - these are the convenience functions that operate within pre-approved limits. Only configuration changes require multisig approval.
 
 ---
 
@@ -312,12 +311,12 @@ uint256 public constant MIN_RECOVERY_PERIOD = 1 days;
 ## Recommendations Summary
 
 ### Before Testnet (High Priority)
-1. Investigate H-2 (single owner module control) and decide on governance model
+1. ~~Investigate H-2 (single owner module control) and decide on governance model~~ ✅ Fixed
 2. ~~Add maximum owner limit (M-1)~~ ✅ Fixed
-3. Add comprehensive integration tests for recovery flow (H-1)
+3. ~~Add comprehensive integration tests for recovery flow (H-1)~~ ✅ Added
 
 ### Before Mainnet
-1. Address H-2 (single owner module control) - design decision needed
+1. ~~Address H-2 (single owner module control)~~ ✅ Fixed - Module configuration now requires multisig approval
 2. Add timelocks for critical operations (L-3)
 3. Consider custom errors for gas optimization (I-3)
 4. Complete NatSpec documentation (I-1)
@@ -327,6 +326,10 @@ uint256 public constant MIN_RECOVERY_PERIOD = 1 days;
 1. Custom errors instead of revert strings
 2. Consider packed structs where applicable
 3. Use unchecked blocks for safe arithmetic
+
+### High Severity Fixes Applied (2026-01-27)
+1. ✅ H-1: Verified `execTransactionFromModule` pattern works correctly with integration tests
+2. ✅ H-2: Module configuration now requires multisig approval (`msg.sender == wallet`)
 
 ### Medium Severity Fixes Applied (2026-01-27)
 1. ✅ M-1: Added MAX_OWNERS = 50 limit

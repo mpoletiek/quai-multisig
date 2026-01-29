@@ -12,7 +12,12 @@
       "Bash(npm run test:run:*)",
       "Bash(npm test:*)",
       "Bash(npx tsc:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(tree:*)",
+      "Bash(xargs:*)",
+      "Bash(grep:*)",
+      "Bash(cloc:*)",
+      "Bash(find:*)"
     ]
   }
 }

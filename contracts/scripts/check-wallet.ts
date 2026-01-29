@@ -2,8 +2,8 @@ import hre from "hardhat";
 import * as quais from "quais";
 import { HttpNetworkConfig } from "hardhat/types";
 
-const MultisigWalletJson = require("./artifacts/contracts/MultisigWallet.sol/MultisigWallet.json");
-const ProxyJson = require("./artifacts/contracts/MultisigWalletProxy.sol/MultisigWalletProxy.json");
+const MultisigWalletJson = require("../artifacts/contracts/MultisigWallet.sol/MultisigWallet.json");
+const ProxyJson = require("../artifacts/contracts/MultisigWalletProxy.sol/MultisigWalletProxy.json");
 
 async function main() {
   console.log("Checking wallet deployment...\n");
@@ -15,7 +15,15 @@ async function main() {
     { usePathing: true }
   );
 
-  const walletAddress = "0x007D207798636d4Df2B45A0BDC052436eFA20a2A";
+  // Get wallet address from command line, env var, or use default
+  const walletAddress = process.argv[2] || process.env.MULTISIG_ADDRESS || "0x007D207798636d4Df2B45A0BDC052436eFA20a2A";
+
+  if (!process.argv[2] && !process.env.MULTISIG_ADDRESS) {
+    console.log("⚠️  Using default wallet address. Specify via:");
+    console.log("   npx ts-node scripts/check-wallet.ts <wallet-address>");
+    console.log("   or set MULTISIG_ADDRESS in .env");
+    console.log();
+  }
 
   console.log("Wallet address:", walletAddress);
   console.log();
@@ -54,8 +62,12 @@ async function main() {
 
     const implAddress = await proxy.getImplementation();
     console.log("Implementation address:", implAddress);
-    console.log("Expected implementation:", "0x00027C852a007C1AF78F40F2051dbf10853Da25B");
-    console.log("Implementation matches:", implAddress === "0x00027C852a007C1AF78F40F2051dbf10853Da25B");
+
+    // Check if expected implementation is set in env
+    if (process.env.MULTISIG_IMPLEMENTATION) {
+      console.log("Expected implementation:", process.env.MULTISIG_IMPLEMENTATION);
+      console.log("Implementation matches:", implAddress === process.env.MULTISIG_IMPLEMENTATION);
+    }
     console.log();
 
     const multisig = new quais.Contract(

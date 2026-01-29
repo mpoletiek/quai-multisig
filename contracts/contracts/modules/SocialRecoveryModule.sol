@@ -9,6 +9,26 @@ import "../MultisigWallet.sol";
  * @notice Allows guardians to recover wallet access
  */
 contract SocialRecoveryModule {
+    // Custom errors (gas efficient)
+    error MustBeCalledByWallet();
+    error GuardiansRequired();
+    error InvalidThreshold();
+    error RecoveryPeriodTooShort();
+    error CannotUpdateConfigWhileRecoveriesPending();
+    error InvalidGuardianAddress();
+    error DuplicateGuardian();
+    error RecoveryNotConfigured();
+    error NotAGuardian();
+    error NewOwnersRequired();
+    error RecoveryAlreadyInitiated();
+    error RecoveryNotInitiated();
+    error RecoveryAlreadyExecuted();
+    error AlreadyApproved();
+    error NotApproved();
+    error NotEnoughApprovals();
+    error RecoveryPeriodNotElapsed();
+    error NotAnOwner();
+
     /// @notice Configuration for wallet recovery
     /// @dev Stored per-wallet, set by wallet owners
     struct RecoveryConfig {
@@ -38,18 +58,23 @@ contract SocialRecoveryModule {
     }
 
     /// @notice Mapping from wallet address to its recovery configuration
+    /// @dev Each wallet has independent guardian configuration; cannot be modified while recoveries pending
     mapping(address => RecoveryConfig) public recoveryConfigs;
 
     /// @notice Mapping from wallet address to recovery hash to recovery details
+    /// @dev Double mapping enables multiple concurrent recovery attempts per wallet with unique hashes
     mapping(address => mapping(bytes32 => Recovery)) public recoveries;
 
     /// @notice Mapping tracking which guardians have approved which recoveries
+    /// @dev Triple nested mapping optimizes gas for approval tracking across wallets and recoveries
     mapping(address => mapping(bytes32 => mapping(address => bool))) public recoveryApprovals;
 
     /// @notice Nonce per wallet to ensure unique recovery hashes
+    /// @dev Incremented on each recovery initiation to prevent hash collisions for identical parameters
     mapping(address => uint256) public recoveryNonces;
 
     /// @notice Array of pending recovery hashes per wallet
+    /// @dev Used for efficient pending recovery checks; cleaned up on execution/cancellation via swap-and-pop
     mapping(address => bytes32[]) public pendingRecoveryHashes;
 
     /// @notice Emitted when recovery is configured for a wallet
@@ -120,7 +145,9 @@ contract SocialRecoveryModule {
      * @param guardians Array of guardian addresses
      * @param threshold Number of guardian approvals required
      * @param recoveryPeriod Time delay before recovery can be executed
-     * @dev Prevents configuration updates when there are pending recoveries to avoid manipulation attacks
+     * @dev SECURITY: Must be called through multisig transaction (msg.sender == wallet)
+     *      This prevents a single owner from unilaterally configuring recovery
+     *      Also prevents configuration updates when there are pending recoveries
      */
     function setupRecovery(
         address wallet,
@@ -128,26 +155,24 @@ contract SocialRecoveryModule {
         uint256 threshold,
         uint256 recoveryPeriod
     ) external {
-        MultisigWallet multisig = MultisigWallet(payable(wallet));
-        require(multisig.isOwner(msg.sender), "Not an owner");
-        require(guardians.length > 0, "Guardians required");
-        require(
-            threshold > 0 && threshold <= guardians.length,
-            "Invalid threshold"
-        );
-        require(recoveryPeriod >= 1 days, "Recovery period too short");
+        // SECURITY FIX (H-2): Require multisig approval by checking msg.sender == wallet
+        // Previously only required isOwner, allowing single owner bypass
+        if (msg.sender != wallet) revert MustBeCalledByWallet();
+        if (guardians.length == 0) revert GuardiansRequired();
+        if (threshold == 0 || threshold > guardians.length) revert InvalidThreshold();
+        if (recoveryPeriod < 1 days) revert RecoveryPeriodTooShort();
 
         // SECURITY: Prevent configuration updates when there are pending recoveries
         // This prevents manipulation attacks where an owner changes the threshold
         // after a recovery is initiated but before it executes
-        require(!hasPendingRecoveries(wallet), "Cannot update config while recoveries are pending");
+        if (hasPendingRecoveries(wallet)) revert CannotUpdateConfigWhileRecoveriesPending();
 
         // Validate guardians
         for (uint256 i = 0; i < guardians.length; i++) {
-            require(guardians[i] != address(0), "Invalid guardian address");
+            if (guardians[i] == address(0)) revert InvalidGuardianAddress();
             // Check for duplicates
             for (uint256 j = i + 1; j < guardians.length; j++) {
-                require(guardians[i] != guardians[j], "Duplicate guardian");
+                if (guardians[i] == guardians[j]) revert DuplicateGuardian();
             }
         }
 
@@ -173,13 +198,10 @@ contract SocialRecoveryModule {
         uint256 newThreshold
     ) external returns (bytes32) {
         RecoveryConfig memory config = recoveryConfigs[wallet];
-        require(config.guardians.length > 0, "Recovery not configured");
-        require(isGuardian(wallet, msg.sender), "Not a guardian");
-        require(newOwners.length > 0, "New owners required");
-        require(
-            newThreshold > 0 && newThreshold <= newOwners.length,
-            "Invalid threshold"
-        );
+        if (config.guardians.length == 0) revert RecoveryNotConfigured();
+        if (!isGuardian(wallet, msg.sender)) revert NotAGuardian();
+        if (newOwners.length == 0) revert NewOwnersRequired();
+        if (newThreshold == 0 || newThreshold > newOwners.length) revert InvalidThreshold();
 
         // Increment nonce to ensure unique recovery hash
         recoveryNonces[wallet]++;
@@ -188,10 +210,7 @@ contract SocialRecoveryModule {
         bytes32 recoveryHash = getRecoveryHash(wallet, newOwners, newThreshold, nonce);
 
         // Check if recovery with this hash already exists (shouldn't happen with nonce, but safety check)
-        require(
-            recoveries[wallet][recoveryHash].executionTime == 0,
-            "Recovery already initiated"
-        );
+        if (recoveries[wallet][recoveryHash].executionTime != 0) revert RecoveryAlreadyInitiated();
 
         recoveries[wallet][recoveryHash] = Recovery({
             newOwners: newOwners,
@@ -222,19 +241,10 @@ contract SocialRecoveryModule {
      * @param recoveryHash Recovery hash
      */
     function approveRecovery(address wallet, bytes32 recoveryHash) external {
-        require(isGuardian(wallet, msg.sender), "Not a guardian");
-        require(
-            recoveries[wallet][recoveryHash].executionTime != 0,
-            "Recovery not initiated"
-        );
-        require(
-            !recoveries[wallet][recoveryHash].executed,
-            "Recovery already executed"
-        );
-        require(
-            !recoveryApprovals[wallet][recoveryHash][msg.sender],
-            "Already approved"
-        );
+        if (!isGuardian(wallet, msg.sender)) revert NotAGuardian();
+        if (recoveries[wallet][recoveryHash].executionTime == 0) revert RecoveryNotInitiated();
+        if (recoveries[wallet][recoveryHash].executed) revert RecoveryAlreadyExecuted();
+        if (recoveryApprovals[wallet][recoveryHash][msg.sender]) revert AlreadyApproved();
 
         recoveryApprovals[wallet][recoveryHash][msg.sender] = true;
         recoveries[wallet][recoveryHash].approvalCount++;
@@ -249,19 +259,10 @@ contract SocialRecoveryModule {
      * @param recoveryHash Recovery hash
      */
     function revokeRecoveryApproval(address wallet, bytes32 recoveryHash) external {
-        require(isGuardian(wallet, msg.sender), "Not a guardian");
-        require(
-            recoveries[wallet][recoveryHash].executionTime != 0,
-            "Recovery not initiated"
-        );
-        require(
-            !recoveries[wallet][recoveryHash].executed,
-            "Recovery already executed"
-        );
-        require(
-            recoveryApprovals[wallet][recoveryHash][msg.sender],
-            "Not approved"
-        );
+        if (!isGuardian(wallet, msg.sender)) revert NotAGuardian();
+        if (recoveries[wallet][recoveryHash].executionTime == 0) revert RecoveryNotInitiated();
+        if (recoveries[wallet][recoveryHash].executed) revert RecoveryAlreadyExecuted();
+        if (!recoveryApprovals[wallet][recoveryHash][msg.sender]) revert NotApproved();
 
         recoveryApprovals[wallet][recoveryHash][msg.sender] = false;
         recoveries[wallet][recoveryHash].approvalCount--;
@@ -277,18 +278,12 @@ contract SocialRecoveryModule {
     function executeRecovery(address wallet, bytes32 recoveryHash) external {
         Recovery storage recovery = recoveries[wallet][recoveryHash];
 
-        require(recovery.executionTime != 0, "Recovery not initiated");
-        require(!recovery.executed, "Recovery already executed");
+        if (recovery.executionTime == 0) revert RecoveryNotInitiated();
+        if (recovery.executed) revert RecoveryAlreadyExecuted();
         // SECURITY: Use threshold stored at initiation time, not current config
         // This prevents manipulation attacks where config is changed mid-recovery
-        require(
-            recovery.approvalCount >= recovery.requiredThreshold,
-            "Not enough approvals"
-        );
-        require(
-            block.timestamp >= recovery.executionTime,
-            "Recovery period not elapsed"
-        );
+        if (recovery.approvalCount < recovery.requiredThreshold) revert NotEnoughApprovals();
+        if (block.timestamp < recovery.executionTime) revert RecoveryPeriodNotElapsed();
 
         recovery.executed = true;
 
@@ -347,11 +342,11 @@ contract SocialRecoveryModule {
      */
     function cancelRecovery(address wallet, bytes32 recoveryHash) external {
         MultisigWallet multisig = MultisigWallet(payable(wallet));
-        require(multisig.isOwner(msg.sender), "Not an owner");
+        if (!multisig.isOwner(msg.sender)) revert NotAnOwner();
 
         Recovery storage recovery = recoveries[wallet][recoveryHash];
-        require(recovery.executionTime != 0, "Recovery not initiated");
-        require(!recovery.executed, "Recovery already executed");
+        if (recovery.executionTime == 0) revert RecoveryNotInitiated();
+        if (recovery.executed) revert RecoveryAlreadyExecuted();
 
         // Remove from pending recoveries
         _removePendingRecovery(wallet, recoveryHash);
@@ -366,7 +361,8 @@ contract SocialRecoveryModule {
      * @param wallet Wallet address
      * @param newOwners New owners
      * @param newThreshold New threshold
-     * @return Recovery hash
+     * @param nonce Unique nonce to ensure recovery hash uniqueness
+     * @return Unique bytes32 hash identifying this specific recovery configuration
      */
     function getRecoveryHash(
         address wallet,

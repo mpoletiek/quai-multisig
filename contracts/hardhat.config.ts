@@ -5,8 +5,12 @@ import "@quai/hardhat-deploy-metadata";
 import "hardhat-gas-reporter";
 import "solidity-coverage";
 import * as dotenv from "dotenv";
+import { setupAbiCopyTask } from "./scripts/copy-abis";
 
 dotenv.config({ path: "../.env" });
+
+// Setup automatic ABI copying after compilation
+setupAbiCopyTask();
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.quai.network";
 const chainId = Number(process.env.CHAIN_ID || "9000");

@@ -1,7 +1,7 @@
 import * as quais from 'quais';
-import type { Contract, Signer, Provider } from '../../types';
+import type { Provider } from '../../types';
 import { CONTRACT_ADDRESSES } from '../../config/contracts';
-import { BaseService } from '../core/BaseService';
+import { BaseModuleService } from './BaseModuleService';
 import {
   isUserRejection,
   validateAddress,
@@ -18,106 +18,69 @@ import WhitelistModuleABI from '../../config/abi/WhitelistModule.json';
 
 /**
  * Service for whitelist module operations
+ *
+ * IMPORTANT (H-2 Security Fix): Configuration functions (addToWhitelist, removeFromWhitelist,
+ * batchAddToWhitelist) now require multisig approval. Use proposeAddToWhitelist(),
+ * proposeRemoveFromWhitelist(), etc. to create multisig proposals. Execution functions
+ * (executeToWhitelist) still work with single owner.
  */
-export class WhitelistModuleService extends BaseService {
+export class WhitelistModuleService extends BaseModuleService {
 
   constructor(provider?: Provider) {
-    super(provider);
+    super(provider, CONTRACT_ADDRESSES.WHITELIST_MODULE, WhitelistModuleABI);
   }
 
   /**
-   * Get whitelist module contract instance
+   * Propose adding address to whitelist (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
    */
-  private getModuleContract(signerOrProvider?: Signer | Provider): Contract {
-    const abi = Array.isArray(WhitelistModuleABI) ? WhitelistModuleABI : (WhitelistModuleABI as any).abi;
-    return new quais.Contract(
-      CONTRACT_ADDRESSES.WHITELIST_MODULE,
-      abi,
-      signerOrProvider || this.provider
-    ) as Contract;
-  }
-
-  /**
-   * Add address to whitelist
-   */
-  async addToWhitelist(
+  async proposeAddToWhitelist(
     walletAddress: string,
     address: string,
     limit: bigint
-  ): Promise<void> {
-    const signer = this.requireSigner();
+  ): Promise<string> {
     const normalizedAddress = validateAddress(address);
-    const module = this.getModuleContract(signer);
-
-    // Estimate gas - will throw if validation fails
-    await estimateGasOrThrow(
-      module.addToWhitelist,
-      [walletAddress, normalizedAddress, limit],
-      'add to whitelist',
-      module
-    );
-
-    const { gasLimit } = await estimateGasWithBuffer(
-      module.addToWhitelist,
-      [walletAddress, normalizedAddress, limit],
-      GasPresets.complex
-    );
-
-    let tx;
-    try {
-      tx = await module.addToWhitelist(walletAddress, normalizedAddress, limit, buildTxOptions(gasLimit));
-    } catch (error: any) {
-      if (isUserRejection(error)) {
-        throw new Error('Transaction was rejected by user');
-      }
-      throw error;
-    }
-
-    const receipt = await tx.wait();
-    logGasUsage('addToWhitelist', receipt, gasLimit);
-
-    if (receipt.status === 0) {
-      throw new Error('Transaction reverted. Possible causes: address already whitelisted or module not enabled.');
-    }
+    return this.createModuleProposal(walletAddress, 'addToWhitelist', [walletAddress, normalizedAddress, limit]);
   }
 
   /**
-   * Remove address from whitelist
+   * Propose removing address from whitelist (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
    */
-  async removeFromWhitelist(walletAddress: string, address: string): Promise<void> {
-    const signer = this.requireSigner();
+  async proposeRemoveFromWhitelist(walletAddress: string, address: string): Promise<string> {
     const normalizedAddress = validateAddress(address);
-    const module = this.getModuleContract(signer);
+    return this.createModuleProposal(walletAddress, 'removeFromWhitelist', [walletAddress, normalizedAddress]);
+  }
 
-    await estimateGasOrThrow(
-      module.removeFromWhitelist,
-      [walletAddress, normalizedAddress],
-      'remove from whitelist',
-      module
-    );
+  /**
+   * Propose batch adding addresses to whitelist (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
+   */
+  async proposeBatchAddToWhitelist(
+    walletAddress: string,
+    addresses: string[],
+    limits: bigint[]
+  ): Promise<string> {
+    const normalizedAddresses = addresses.map(addr => validateAddress(addr));
+    return this.createModuleProposal(walletAddress, 'batchAddToWhitelist', [walletAddress, normalizedAddresses, limits]);
+  }
 
-    const { gasLimit } = await estimateGasWithBuffer(
-      module.removeFromWhitelist,
-      [walletAddress, normalizedAddress],
-      GasPresets.complex
-    );
+  /**
+   * @deprecated Use proposeAddToWhitelist() instead - direct calls now require multisig approval (H-2 fix)
+   */
+  async addToWhitelist(
+    _walletAddress: string,
+    _address: string,
+    _limit: bigint
+  ): Promise<void> {
+    this.throwDeprecationError('addToWhitelist', 'proposeAddToWhitelist');
+  }
 
-    let tx;
-    try {
-      tx = await module.removeFromWhitelist(walletAddress, normalizedAddress, buildTxOptions(gasLimit));
-    } catch (error: any) {
-      if (isUserRejection(error)) {
-        throw new Error('Transaction was rejected by user');
-      }
-      throw error;
-    }
-
-    const receipt = await tx.wait();
-    logGasUsage('removeFromWhitelist', receipt, gasLimit);
-
-    if (receipt.status === 0) {
-      throw new Error('Transaction reverted. Possible causes: address not whitelisted or module not enabled.');
-    }
+  /**
+   * @deprecated Use proposeRemoveFromWhitelist() instead - direct calls now require multisig approval (H-2 fix)
+   */
+  async removeFromWhitelist(_walletAddress: string, _address: string): Promise<void> {
+    this.throwDeprecationError('removeFromWhitelist', 'proposeRemoveFromWhitelist');
   }
 
   /**

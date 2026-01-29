@@ -119,10 +119,42 @@ Quai Network EVM supports Solidity versions up to **0.8.20**. This project uses 
 
 ## Security
 
+See [SECURITY_ANALYSIS.md](../SECURITY_ANALYSIS.md) for the complete security review.
+
+### Security Features
+
 - All contracts use OpenZeppelin's battle-tested implementations
 - ReentrancyGuard protection on execution functions
-- Comprehensive access control
+- Comprehensive access control with `onlyOwner`, `onlySelf`, `onlyModule` modifiers
 - Upgradeable via proxy pattern
+- Chain ID included in transaction hashes (prevents cross-chain replay)
+- Maximum 50 owners limit (prevents gas limit issues)
+
+### Module Access Control (H-2 Security Fix)
+
+**Important**: Module configuration functions require multisig approval (via `onlyWallet` modifier):
+
+| Module | Configuration Functions | Execution Functions |
+|--------|------------------------|---------------------|
+| DailyLimitModule | `setDailyLimit()`, `resetDailyLimit()` | `executeBelowLimit()` (single owner) |
+| WhitelistModule | `addToWhitelist()`, `removeFromWhitelist()`, `batchAddToWhitelist()` | `executeToWhitelist()` (single owner) |
+| SocialRecoveryModule | `setupRecovery()` | Guardian functions (guardians only) |
+
+Configuration functions must be called through the multisig wallet (propose → approve → execute).
+
+### Test Coverage
+
+Run the full test suite:
+
+```bash
+npm run test -- --network hardhat
+```
+
+**123 tests passing** covering:
+- Core MultisigWallet operations
+- All module functionality
+- Security fix verification (H-1, H-2)
+- Integration scenarios
 
 ## Additional Commands
 

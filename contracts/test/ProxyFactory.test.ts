@@ -36,7 +36,7 @@ describe("ProxyFactory", function () {
       const ProxyFactory = await ethers.getContractFactory("ProxyFactory");
       await expect(
         ProxyFactory.deploy(ethers.ZeroAddress)
-      ).to.be.revertedWith("Invalid implementation address");
+      ).to.be.revertedWithCustomError(factory, "InvalidImplementationAddress");
     });
 
     it("should initialize with empty wallet list", async function () {
@@ -108,7 +108,7 @@ describe("ProxyFactory", function () {
       const salt = ethers.randomBytes(32);
       await expect(
         factory.connect(owner1).createWallet([], THRESHOLD, salt)
-      ).to.be.revertedWith("Owners required");
+      ).to.be.revertedWithCustomError(factory, "OwnersRequired");
     });
 
     it("should reject zero threshold", async function () {
@@ -116,7 +116,7 @@ describe("ProxyFactory", function () {
       const salt = ethers.randomBytes(32);
       await expect(
         factory.connect(owner1).createWallet(owners, 0, salt)
-      ).to.be.revertedWith("Invalid threshold");
+      ).to.be.revertedWithCustomError(factory, "InvalidThreshold");
     });
 
     it("should reject threshold greater than owners", async function () {
@@ -124,7 +124,7 @@ describe("ProxyFactory", function () {
       const salt = ethers.randomBytes(32);
       await expect(
         factory.connect(owner1).createWallet(owners, 3, salt)
-      ).to.be.revertedWith("Invalid threshold");
+      ).to.be.revertedWithCustomError(factory, "InvalidThreshold");
     });
 
     it("should create multiple wallets", async function () {
@@ -246,20 +246,20 @@ describe("ProxyFactory", function () {
 
       await expect(
         factory.connect(nonOwner).registerWallet(newWalletAddress)
-      ).to.be.revertedWith("Caller is not an owner");
+      ).to.be.revertedWithCustomError(factory, "CallerIsNotAnOwner");
     });
 
     it("should reject zero address", async function () {
       await expect(
         factory.connect(owner1).registerWallet(ethers.ZeroAddress)
-      ).to.be.revertedWith("Invalid wallet address");
+      ).to.be.revertedWithCustomError(factory, "InvalidWalletAddress");
     });
 
     it("should reject already registered wallet", async function () {
       const walletAddress = await wallet.getAddress();
       await expect(
         factory.connect(owner1).registerWallet(walletAddress)
-      ).to.be.revertedWith("Wallet already registered");
+      ).to.be.revertedWithCustomError(factory, "WalletAlreadyRegistered");
     });
   });
 

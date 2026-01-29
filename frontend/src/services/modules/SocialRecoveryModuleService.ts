@@ -1,7 +1,7 @@
 import * as quais from 'quais';
-import type { Contract, Signer, Provider } from '../../types';
+import type { Provider } from '../../types';
 import { CONTRACT_ADDRESSES } from '../../config/contracts';
-import { BaseService } from '../core/BaseService';
+import { BaseModuleService } from './BaseModuleService';
 import {
   isUserRejection,
   validateAddress,
@@ -35,23 +35,15 @@ export interface PendingRecovery extends Recovery {
 
 /**
  * Service for social recovery module operations
+ *
+ * IMPORTANT (H-2 Security Fix): The setupRecovery function now requires multisig approval.
+ * Use proposeSetupRecovery() to create a multisig proposal. Guardian operations
+ * (initiateRecovery, approveRecovery, etc.) still work directly.
  */
-export class SocialRecoveryModuleService extends BaseService {
+export class SocialRecoveryModuleService extends BaseModuleService {
 
   constructor(provider?: Provider) {
-    super(provider);
-  }
-
-  /**
-   * Get social recovery module contract instance
-   */
-  private getModuleContract(signerOrProvider?: Signer | Provider): Contract {
-    const abi = Array.isArray(SocialRecoveryModuleABI) ? SocialRecoveryModuleABI : (SocialRecoveryModuleABI as any).abi;
-    return new quais.Contract(
-      CONTRACT_ADDRESSES.SOCIAL_RECOVERY_MODULE,
-      abi,
-      signerOrProvider || this.provider
-    ) as Contract;
+    super(provider, CONTRACT_ADDRESSES.SOCIAL_RECOVERY_MODULE, SocialRecoveryModuleABI);
   }
 
   /**
@@ -68,16 +60,15 @@ export class SocialRecoveryModuleService extends BaseService {
   }
 
   /**
-   * Setup recovery configuration
+   * Propose setting up recovery configuration (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
    */
-  async setupRecovery(
+  async proposeSetupRecovery(
     walletAddress: string,
     guardians: string[],
     threshold: number,
     recoveryPeriodDays: number
-  ): Promise<void> {
-    const signer = this.requireSigner();
-
+  ): Promise<string> {
     // Validate guardians
     const normalizedGuardians = guardians.map(addr => validateAddress(addr));
 
@@ -90,41 +81,24 @@ export class SocialRecoveryModuleService extends BaseService {
       throw new Error('Recovery period must be at least 1 day');
     }
 
-    const module = this.getModuleContract(signer);
+    return this.createModuleProposal(walletAddress, 'setupRecovery', [
+      walletAddress,
+      normalizedGuardians,
+      threshold,
+      recoveryPeriodSeconds
+    ]);
+  }
 
-    await estimateGasOrThrow(
-      module.setupRecovery,
-      [walletAddress, normalizedGuardians, threshold, recoveryPeriodSeconds],
-      'setup recovery',
-      module
-    );
-
-    const { gasLimit } = await estimateGasWithBuffer(
-      module.setupRecovery,
-      [walletAddress, normalizedGuardians, threshold, recoveryPeriodSeconds],
-      GasPresets.complex
-    );
-
-    let tx;
-    try {
-      tx = await module.setupRecovery(
-        walletAddress,
-        normalizedGuardians,
-        threshold,
-        recoveryPeriodSeconds,
-        buildTxOptions(gasLimit)
-      );
-    } catch (error: any) {
-      if (isUserRejection(error)) {
-        throw new Error('Transaction was rejected by user');
-      }
-      throw error;
-    }
-
-    const receipt = await tx.wait();
-    if (receipt.status === 0) {
-      throw new Error('Transaction reverted. Check guardians, threshold, and recovery period.');
-    }
+  /**
+   * @deprecated Use proposeSetupRecovery() instead - direct calls now require multisig approval (H-2 fix)
+   */
+  async setupRecovery(
+    _walletAddress: string,
+    _guardians: string[],
+    _threshold: number,
+    _recoveryPeriodDays: number
+  ): Promise<void> {
+    this.throwDeprecationError('setupRecovery', 'proposeSetupRecovery');
   }
 
   /**

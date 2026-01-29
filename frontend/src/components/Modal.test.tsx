@@ -63,13 +63,13 @@ describe('Modal', () => {
     it('should apply lg size class', () => {
       const { container } = render(<Modal {...defaultProps} size="lg" />);
 
-      expect(container.querySelector('.max-w-lg')).toBeInTheDocument();
+      expect(container.querySelector('.max-w-2xl')).toBeInTheDocument();
     });
 
     it('should apply xl size class', () => {
       const { container } = render(<Modal {...defaultProps} size="xl" />);
 
-      expect(container.querySelector('.max-w-2xl')).toBeInTheDocument();
+      expect(container.querySelector('.max-w-4xl')).toBeInTheDocument();
     });
   });
 

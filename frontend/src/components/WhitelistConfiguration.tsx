@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { multisigService } from '../services/MultisigService';
 import { notificationManager } from './NotificationContainer';
 import { EmptyState } from './EmptyState';
+import { Modal } from './Modal';
 import * as quais from 'quais';
 
 interface WhitelistConfigurationProps {
@@ -27,73 +28,70 @@ export function WhitelistConfiguration({ walletAddress, onUpdate }: WhitelistCon
     refetchInterval: 30000, // Refetch every 30 seconds
   });
 
-  // Add to whitelist mutation
-  const addToWhitelist = useMutation({
+  // Propose add to whitelist mutation (now creates a multisig proposal)
+  const proposeAddToWhitelist = useMutation({
     mutationFn: async ({ address, limit }: { address: string; limit: bigint }) => {
-      return await multisigService.addToWhitelist(walletAddress, address, limit);
+      return await multisigService.proposeAddToWhitelist(walletAddress, address, limit);
     },
-    onSuccess: (_, variables) => {
-      const limitText = variables.limit === 0n 
-        ? 'unlimited' 
+    onSuccess: (txHash, variables) => {
+      const limitText = variables.limit === 0n
+        ? 'unlimited'
         : `${parseFloat(quais.formatQuai(variables.limit)).toFixed(4)} QUAI`;
       const shortAddress = `${variables.address.slice(0, 6)}...${variables.address.slice(-4)}`;
-      
+      const shortHash = `${txHash.slice(0, 10)}...${txHash.slice(-8)}`;
+
       notificationManager.add({
-        message: `✅ Added ${shortAddress} to whitelist (limit: ${limitText})`,
+        message: `Proposal created to add ${shortAddress} to whitelist (limit: ${limitText}). Requires multisig approval.`,
         type: 'success',
       });
 
       // Browser notification
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification('Address Added to Whitelist', {
-          body: `${shortAddress} added with limit: ${limitText}`,
+        new Notification('Whitelist Proposal Created', {
+          body: `Proposal ${shortHash} to add ${shortAddress} requires approval`,
           icon: '/vite.svg',
         });
       }
 
-      queryClient.invalidateQueries({ queryKey: ['whitelistedAddresses'] });
-      // Wait a bit for the transaction to be mined and events to be indexed
-      setTimeout(() => {
-        refetch();
-      }, 2000);
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
       setNewAddress('');
       setNewLimit('');
       setErrors([]);
       onUpdate();
     },
     onError: (error) => {
-      setErrors([error instanceof Error ? error.message : 'Failed to add address to whitelist']);
+      setErrors([error instanceof Error ? error.message : 'Failed to create proposal']);
     },
   });
 
-  // Remove from whitelist mutation
-  const removeFromWhitelist = useMutation({
+  // Propose remove from whitelist mutation (now creates a multisig proposal)
+  const proposeRemoveFromWhitelist = useMutation({
     mutationFn: async (address: string) => {
-      return await multisigService.removeFromWhitelist(walletAddress, address);
+      return await multisigService.proposeRemoveFromWhitelist(walletAddress, address);
     },
-    onSuccess: (_, address) => {
+    onSuccess: (txHash, address) => {
       const shortAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
-      
+      const shortHash = `${txHash.slice(0, 10)}...${txHash.slice(-8)}`;
+
       notificationManager.add({
-        message: `✅ Removed ${shortAddress} from whitelist`,
+        message: `Proposal created to remove ${shortAddress} from whitelist. Requires multisig approval.`,
         type: 'success',
       });
 
       // Browser notification
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification('Address Removed from Whitelist', {
-          body: `${shortAddress} has been removed from the whitelist`,
+        new Notification('Whitelist Removal Proposal Created', {
+          body: `Proposal ${shortHash} to remove ${shortAddress} requires approval`,
           icon: '/vite.svg',
         });
       }
 
-      queryClient.invalidateQueries({ queryKey: ['whitelistedAddresses'] });
-      refetch();
+      queryClient.invalidateQueries({ queryKey: ['pendingTransactions'] });
       setAddressToRemove(null);
       onUpdate();
     },
     onError: (error) => {
-      setErrors([error instanceof Error ? error.message : 'Failed to remove address from whitelist']);
+      setErrors([error instanceof Error ? error.message : 'Failed to create proposal']);
     },
   });
 
@@ -134,17 +132,17 @@ export function WhitelistConfiguration({ walletAddress, onUpdate }: WhitelistCon
     }
 
     const normalizedAddress = quais.getAddress(newAddress.trim());
-    const limitValue = newLimit.trim() === '' || newLimit.trim() === '0' 
-      ? 0n 
+    const limitValue = newLimit.trim() === '' || newLimit.trim() === '0'
+      ? 0n
       : quais.parseQuai(newLimit.trim());
 
-    addToWhitelist.mutate({ address: normalizedAddress, limit: limitValue });
+    proposeAddToWhitelist.mutate({ address: normalizedAddress, limit: limitValue });
   };
 
   const handleRemove = async (address: string) => {
-    if (window.confirm(`Remove ${address} from whitelist?`)) {
+    if (window.confirm(`Create a proposal to remove ${address} from whitelist? This will require multisig approval.`)) {
       setAddressToRemove(address);
-      removeFromWhitelist.mutate(address);
+      proposeRemoveFromWhitelist.mutate(address);
     }
   };
 
@@ -156,13 +154,30 @@ export function WhitelistConfiguration({ walletAddress, onUpdate }: WhitelistCon
   };
 
   return (
-    <div className="vault-panel p-4">
-      <div className="mb-4">
-        <h2 className="text-lg font-display font-bold text-dark-200">Whitelist Configuration</h2>
-      </div>
+    <Modal
+      isOpen={true}
+      onClose={onUpdate}
+      title="Whitelist Configuration"
+      size="lg"
+    >
+      <div className="space-y-6">
+          {/* Multisig Approval Notice */}
+        <div className="bg-gradient-to-r from-green-900/90 via-green-800/90 to-green-900/90 border-l-4 border-green-600 rounded-md p-4">
+        <div className="flex items-start gap-3">
+          <svg className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+          </svg>
+          <div>
+            <h4 className="text-base font-semibold text-green-200 mb-1">Multisig Approval Required</h4>
+            <p className="text-sm text-green-200/90">
+              Changes to the whitelist now require multisig approval. When you add or remove addresses, a proposal will be created that other owners must approve before it takes effect.
+            </p>
+          </div>
+          </div>
+        </div>
 
-      {/* Important Information */}
-      <div className="mb-4 bg-gradient-to-r from-blue-900/90 via-blue-800/90 to-blue-900/90 border-l-4 border-blue-600 rounded-md p-4">
+        {/* Important Information */}
+        <div className="bg-gradient-to-r from-blue-900/90 via-blue-800/90 to-blue-900/90 border-l-4 border-blue-600 rounded-md p-4">
         <div className="flex items-start gap-3">
           <svg className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
             <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
@@ -176,12 +191,12 @@ export function WhitelistConfiguration({ walletAddress, onUpdate }: WhitelistCon
               <strong>Important:</strong> Only use whitelist for trusted addresses. Once whitelisted, any owner can send funds to that address without approval from other owners.
             </p>
           </div>
+          </div>
         </div>
-      </div>
 
-      {/* Add Address Form */}
-      <div className="mb-4 p-4 bg-vault-dark-4 rounded-md border border-dark-600">
-        <h3 className="text-base font-semibold text-dark-200 mb-3">Add Address to Whitelist</h3>
+        {/* Add Address Form */}
+        <div className="p-4 bg-vault-dark-4 rounded-md border border-dark-600">
+        <h3 className="text-base font-semibold text-dark-200 mb-3">Propose Add Address to Whitelist</h3>
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-mono text-dark-500 uppercase tracking-wider mb-2">
@@ -217,92 +232,93 @@ export function WhitelistConfiguration({ walletAddress, onUpdate }: WhitelistCon
             <div className="bg-gradient-to-r from-primary-900/90 via-primary-800/90 to-primary-900/90 border-l-4 border-primary-600 rounded-md p-3 shadow-red-glow">
               <ul className="text-sm text-primary-200 space-y-1">
                 {errors.map((error, index) => (
-                  <li key={index} className="font-medium">• {error}</li>
+                  <li key={index} className="font-medium">{error}</li>
                 ))}
               </ul>
             </div>
           )}
           <button
             onClick={handleAdd}
-            disabled={addToWhitelist.isPending}
+            disabled={proposeAddToWhitelist.isPending}
             className="btn-primary text-base px-4 py-2 inline-flex items-center gap-2"
           >
-            {addToWhitelist.isPending ? (
+            {proposeAddToWhitelist.isPending ? (
               <>
                 <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                Adding...
+                Creating Proposal...
               </>
             ) : (
               <>
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
-                Add to Whitelist
+                Propose Add to Whitelist
               </>
             )}
-          </button>
-        </div>
-      </div>
-
-      {/* Whitelisted Addresses List */}
-      {isLoading ? (
-        <div className="text-center py-8">
-          <div className="relative inline-block">
-            <div className="absolute inset-0 bg-primary-600/20 blur-xl animate-pulse"></div>
-            <div className="relative inline-block h-8 w-8 animate-spin rounded-full border-2 border-solid border-primary-600 border-r-transparent"></div>
+            </button>
           </div>
-          <p className="mt-4 text-base text-dark-400 font-semibold">Loading whitelist...</p>
         </div>
-      ) : !whitelistedAddresses || whitelistedAddresses.length === 0 ? (
-        <EmptyState
-          icon={
-            <svg className="w-6 h-6 text-dark-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-          }
-          title="No Whitelisted Addresses"
-          description="Add addresses to the whitelist to enable quick execution of transactions without requiring approvals. Use the form above to add addresses."
-          className="py-8"
-        />
-      ) : (
-        <div className="space-y-2">
-          {whitelistedAddresses.map((entry) => (
-            <div
-              key={entry.address}
-              className="flex items-center justify-between p-3 bg-vault-dark-4 rounded-md border border-dark-600 hover:border-primary-600/30 transition-all"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3 mb-1">
-                  <div className="w-2 h-2 rounded-full bg-primary-600"></div>
-                  <span className="text-base font-mono text-primary-300 truncate">{entry.address}</span>
-                </div>
-                <p className="text-sm text-dark-500">
-                  Limit: <span className="font-semibold text-dark-300">{formatLimit(entry.limit)}</span>
-                </p>
-              </div>
-              <button
-                onClick={() => handleRemove(entry.address)}
-                disabled={removeFromWhitelist.isPending}
-                className="btn-secondary text-sm px-3 py-1.5 inline-flex items-center gap-2 flex-shrink-0"
-              >
-                {removeFromWhitelist.isPending && addressToRemove === entry.address ? (
-                  <>
-                    <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-                    Removing...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    Remove
-                  </>
-                )}
-              </button>
+
+        {/* Whitelisted Addresses List */}
+          {isLoading ? (
+          <div className="text-center py-8">
+            <div className="relative inline-block">
+              <div className="absolute inset-0 bg-primary-600/20 blur-xl animate-pulse"></div>
+              <div className="relative inline-block h-8 w-8 animate-spin rounded-full border-2 border-solid border-primary-600 border-r-transparent"></div>
             </div>
-          ))}
-        </div>
-      )}
-    </div>
+            <p className="mt-4 text-base text-dark-400 font-semibold">Loading whitelist...</p>
+          </div>
+        ) : !whitelistedAddresses || whitelistedAddresses.length === 0 ? (
+            <EmptyState
+            icon={
+              <svg className="w-6 h-6 text-dark-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+            }
+            title="No Whitelisted Addresses"
+            description="Add addresses to the whitelist to enable quick execution of transactions without requiring approvals. Use the form above to create a proposal."
+            className="py-8"
+          />
+        ) : (
+            <div className="space-y-2">
+            {whitelistedAddresses.map((entry) => (
+              <div
+                key={entry.address}
+                className="flex items-center justify-between p-3 bg-vault-dark-4 rounded-md border border-dark-600 hover:border-primary-600/30 transition-all"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-primary-600"></div>
+                    <span className="text-base font-mono text-primary-300 truncate">{entry.address}</span>
+                  </div>
+                  <p className="text-sm text-dark-500">
+                    Limit: <span className="font-semibold text-dark-300">{formatLimit(entry.limit)}</span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleRemove(entry.address)}
+                  disabled={proposeRemoveFromWhitelist.isPending}
+                  className="btn-secondary text-sm px-3 py-1.5 inline-flex items-center gap-2 flex-shrink-0"
+                >
+                  {proposeRemoveFromWhitelist.isPending && addressToRemove === entry.address ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                      Creating Proposal...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      Propose Remove
+                    </>
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }

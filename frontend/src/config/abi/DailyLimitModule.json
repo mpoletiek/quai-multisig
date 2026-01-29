@@ -1,6 +1,41 @@
 {
   "abi": [
     {
+      "inputs": [],
+      "name": "DailyLimitNotSet",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ExceedsDailyLimit",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidDestination",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ModuleNotEnabled",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "MustBeCalledByWallet",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NotAnOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "TransactionFailed",
+      "type": "error"
+    },
+    {
       "anonymous": false,
       "inputs": [
         {

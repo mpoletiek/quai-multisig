@@ -12,6 +12,36 @@
       "type": "constructor"
     },
     {
+      "inputs": [],
+      "name": "CallerIsNotAnOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidImplementationAddress",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidThreshold",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidWalletAddress",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "OwnersRequired",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "WalletAlreadyRegistered",
+      "type": "error"
+    },
+    {
       "anonymous": false,
       "inputs": [
         {

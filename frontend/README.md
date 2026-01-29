@@ -114,6 +114,23 @@ src/
 - **WhitelistModuleService** - Address whitelisting
 - **SocialRecoveryModuleService** - Guardian-based recovery
 
+## Module Configuration (H-2 Security)
+
+Module configuration now requires **multisig approval**. The frontend uses `propose*` methods that create multisig proposals:
+
+| Action | Method | Workflow |
+|--------|--------|----------|
+| Set daily limit | `proposeSetDailyLimit()` | Creates proposal → Requires approval → Executed |
+| Add to whitelist | `proposeAddToWhitelist()` | Creates proposal → Requires approval → Executed |
+| Setup recovery | `proposeSetupRecovery()` | Creates proposal → Requires approval → Executed |
+
+The UI components display "Multisig Approval Required" banners and use "Propose" button text to indicate the proposal-based workflow.
+
+**Deprecated methods** (throw errors if called):
+- `setDailyLimit()` → Use `proposeSetDailyLimit()`
+- `addToWhitelist()` → Use `proposeAddToWhitelist()`
+- `setupRecovery()` → Use `proposeSetupRecovery()`
+
 ## Testing
 
 The frontend has 330+ passing tests covering:

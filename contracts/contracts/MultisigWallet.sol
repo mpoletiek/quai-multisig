@@ -10,6 +10,34 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
  * @notice This is the implementation contract used by all proxy instances
  */
 contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
+    // Custom errors (gas efficient)
+    error NotAnOwner();
+    error OnlySelf();
+    error NotAnAuthorizedModule();
+    error TransactionDoesNotExist();
+    error TransactionAlreadyExecuted();
+    error TransactionAlreadyCancelled();
+    error OwnersRequired();
+    error TooManyOwners();
+    error InvalidThreshold();
+    error InvalidOwnerAddress();
+    error DuplicateOwner();
+    error InvalidDestinationAddress();
+    error TransactionAlreadyExists();
+    error AlreadyApproved();
+    error TransactionExecutionFailed();
+    error TransactionHasBeenCancelled();
+    error NotEnoughApprovals();
+    error NotApproved();
+    error NotProposerAndNotEnoughApprovalsToCancel();
+    error AlreadyAnOwner();
+    error MaxOwnersReached();
+    error CannotRemoveOwnerWouldFallBelowThreshold();
+    error InvalidModuleAddress();
+    error ModuleAlreadyEnabled();
+    error ModuleNotEnabled();
+    error ModuleCannotModifyModulePermissions();
+
     /// @notice Maximum number of owners allowed (prevents DoS from gas-intensive loops)
     uint256 public constant MAX_OWNERS = 50;
 
@@ -35,24 +63,31 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
     }
 
     /// @notice Mapping of address to owner status
+    /// @dev O(1) lookup for owner verification, more gas-efficient than iterating through owners array
     mapping(address => bool) public isOwner;
 
     /// @notice Array of all owner addresses
+    /// @dev Used for iteration when needed (e.g., clearing approvals), kept in sync with isOwner mapping
     address[] public owners;
 
     /// @notice Number of approvals required to execute a transaction
+    /// @dev Must satisfy: 1 <= threshold <= owners.length
     uint256 public threshold;
 
     /// @notice Transaction nonce used for hash generation
+    /// @dev Incremented on each proposal to ensure unique transaction hashes, prevents replay attacks
     uint256 public nonce;
 
     /// @notice Mapping of transaction hash to transaction data
+    /// @dev Uses bytes32 key instead of array for O(1) lookup and to support non-sequential proposals
     mapping(bytes32 => Transaction) public transactions;
 
     /// @notice Mapping of transaction hash to owner approvals
+    /// @dev Nested mapping structure optimizes gas for approval checks and prevents approval manipulation
     mapping(bytes32 => mapping(address => bool)) public approvals;
 
     /// @notice Mapping of enabled module addresses
+    /// @dev Modules can execute transactions via execTransactionFromModule but cannot modify module permissions
     mapping(address => bool) public modules;
 
     /// @notice Emitted when a new transaction is proposed
@@ -128,40 +163,40 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
 
     /// @notice Restricts function access to wallet owners only
     modifier onlyOwner() {
-        require(isOwner[msg.sender], "Not an owner");
+        if (!isOwner[msg.sender]) revert NotAnOwner();
         _;
     }
 
     /// @notice Restricts function access to the wallet itself (for multisig-approved actions)
     modifier onlySelf() {
-        require(msg.sender == address(this), "Only self");
+        if (msg.sender != address(this)) revert OnlySelf();
         _;
     }
 
     /// @notice Restricts function access to enabled modules only
     modifier onlyModule() {
-        require(modules[msg.sender], "Not an authorized module");
+        if (!modules[msg.sender]) revert NotAnAuthorizedModule();
         _;
     }
 
     /// @notice Ensures the specified transaction exists
     /// @param txHash Transaction hash to check
     modifier txExists(bytes32 txHash) {
-        require(transactions[txHash].to != address(0), "Transaction does not exist");
+        if (transactions[txHash].to == address(0)) revert TransactionDoesNotExist();
         _;
     }
 
     /// @notice Ensures the specified transaction has not been executed
     /// @param txHash Transaction hash to check
     modifier notExecuted(bytes32 txHash) {
-        require(!transactions[txHash].executed, "Transaction already executed");
+        if (transactions[txHash].executed) revert TransactionAlreadyExecuted();
         _;
     }
 
     /// @notice Ensures the specified transaction has not been cancelled
     /// @param txHash Transaction hash to check
     modifier notCancelled(bytes32 txHash) {
-        require(!transactions[txHash].cancelled, "Transaction already cancelled");
+        if (transactions[txHash].cancelled) revert TransactionAlreadyCancelled();
         _;
     }
 
@@ -179,12 +214,9 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         address[] memory _owners,
         uint256 _threshold
     ) external initializer {
-        require(_owners.length > 0, "Owners required");
-        require(_owners.length <= MAX_OWNERS, "Too many owners");
-        require(
-            _threshold > 0 && _threshold <= _owners.length,
-            "Invalid threshold"
-        );
+        if (_owners.length == 0) revert OwnersRequired();
+        if (_owners.length > MAX_OWNERS) revert TooManyOwners();
+        if (_threshold == 0 || _threshold > _owners.length) revert InvalidThreshold();
 
         __ReentrancyGuard_init();
 
@@ -192,8 +224,8 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         for (uint256 i = 0; i < _owners.length; i++) {
             address owner = _owners[i];
 
-            require(owner != address(0), "Invalid owner address");
-            require(!isOwner[owner], "Duplicate owner");
+            if (owner == address(0)) revert InvalidOwnerAddress();
+            if (isOwner[owner]) revert DuplicateOwner();
 
             isOwner[owner] = true;
             owners.push(owner);
@@ -215,17 +247,17 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         uint256 value,
         bytes memory data
     ) external onlyOwner returns (bytes32) {
-        require(to != address(0), "Invalid destination address");
+        if (to == address(0)) revert InvalidDestinationAddress();
 
         bytes32 txHash = getTransactionHash(to, value, data, nonce);
 
         // Check if transaction already exists
         Transaction storage existingTx = transactions[txHash];
         bool isOverwritingCancelled = false;
-        
+
         // If transaction exists and is not cancelled, reject
         if (existingTx.to != address(0)) {
-            require(existingTx.cancelled, "Transaction already exists");
+            if (!existingTx.cancelled) revert TransactionAlreadyExists();
             // If cancelled, we'll overwrite it below (treat as new proposal)
             isOverwritingCancelled = true;
         }
@@ -270,7 +302,7 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         notExecuted(txHash)
         notCancelled(txHash)
     {
-        require(!approvals[txHash][msg.sender], "Already approved");
+        if (approvals[txHash][msg.sender]) revert AlreadyApproved();
 
         approvals[txHash][msg.sender] = true;
         transactions[txHash].numApprovals++;
@@ -335,13 +367,13 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
                     (bool success, ) = transaction.to.call{value: transaction.value}(
                         transaction.data
                     );
-                    require(success, "Transaction execution failed");
+                    if (!success) revert TransactionExecutionFailed();
                 }
             } else {
                 (bool success, ) = transaction.to.call{value: transaction.value}(
                     transaction.data
                 );
-                require(success, "Transaction execution failed");
+                if (!success) revert TransactionExecutionFailed();
             }
 
             emit TransactionExecuted(txHash, msg.sender);
@@ -367,12 +399,9 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
 
         // Explicit check: cancelled transactions cannot be executed
         // (Defense-in-depth: modifier already checks this, but explicit for clarity)
-        require(!transaction.cancelled, "Transaction has been cancelled");
+        if (transaction.cancelled) revert TransactionHasBeenCancelled();
 
-        require(
-            transaction.numApprovals >= threshold,
-            "Not enough approvals"
-        );
+        if (transaction.numApprovals < threshold) revert NotEnoughApprovals();
 
         transaction.executed = true;
 
@@ -411,14 +440,14 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
                 (bool success, ) = transaction.to.call{value: transaction.value}(
                     transaction.data
                 );
-                require(success, "Transaction execution failed");
+                if (!success) revert TransactionExecutionFailed();
             }
         } else {
             // External call - use standard call mechanism
             (bool success, ) = transaction.to.call{value: transaction.value}(
                 transaction.data
             );
-            require(success, "Transaction execution failed");
+            if (!success) revert TransactionExecutionFailed();
         }
 
         emit TransactionExecuted(txHash, msg.sender);
@@ -435,7 +464,7 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         notExecuted(txHash)
         notCancelled(txHash)
     {
-        require(approvals[txHash][msg.sender], "Not approved");
+        if (!approvals[txHash][msg.sender]) revert NotApproved();
 
         approvals[txHash][msg.sender] = false;
         transactions[txHash].numApprovals--;
@@ -456,16 +485,13 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
         notCancelled(txHash)
     {
         Transaction storage transaction = transactions[txHash];
-        
+
         // Check if caller is the proposer
         bool isProposer = transaction.proposer == msg.sender;
-        
+
         // If not proposer, require threshold approvals
         if (!isProposer) {
-            require(
-                transaction.numApprovals >= threshold,
-                "Not proposer and not enough approvals to cancel"
-            );
+            if (transaction.numApprovals < threshold) revert NotProposerAndNotEnoughApprovalsToCancel();
         }
 
         // Mark as cancelled
@@ -485,9 +511,9 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
      * @param owner Address of new owner
      */
     function _addOwner(address owner) internal {
-        require(owner != address(0), "Invalid owner address");
-        require(!isOwner[owner], "Already an owner");
-        require(owners.length < MAX_OWNERS, "Max owners reached");
+        if (owner == address(0)) revert InvalidOwnerAddress();
+        if (isOwner[owner]) revert AlreadyAnOwner();
+        if (owners.length >= MAX_OWNERS) revert MaxOwnersReached();
 
         isOwner[owner] = true;
         owners.push(owner);
@@ -508,8 +534,8 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
      * @param owner Address of owner to remove
      */
     function _removeOwner(address owner) internal {
-        require(isOwner[owner], "Not an owner");
-        require(owners.length - 1 >= threshold, "Cannot remove owner: would fall below threshold");
+        if (!isOwner[owner]) revert NotAnOwner();
+        if (owners.length - 1 < threshold) revert CannotRemoveOwnerWouldFallBelowThreshold();
 
         isOwner[owner] = false;
 
@@ -538,10 +564,7 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
      * @param _threshold New threshold value
      */
     function _changeThreshold(uint256 _threshold) internal {
-        require(
-            _threshold > 0 && _threshold <= owners.length,
-            "Invalid threshold"
-        );
+        if (_threshold == 0 || _threshold > owners.length) revert InvalidThreshold();
 
         threshold = _threshold;
 
@@ -561,8 +584,8 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
      * @param module Module address to enable
      */
     function enableModule(address module) external onlySelf {
-        require(module != address(0), "Invalid module address");
-        require(!modules[module], "Module already enabled");
+        if (module == address(0)) revert InvalidModuleAddress();
+        if (modules[module]) revert ModuleAlreadyEnabled();
 
         modules[module] = true;
 
@@ -574,7 +597,7 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
      * @param module Module address to disable
      */
     function disableModule(address module) external onlySelf {
-        require(modules[module], "Module not enabled");
+        if (!modules[module]) revert ModuleNotEnabled();
 
         modules[module] = false;
 
@@ -589,24 +612,23 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
      * @param to Destination address
      * @param value Amount to send
      * @param data Transaction data
+     * @return success True if the transaction succeeded, false otherwise
      */
     function execTransactionFromModule(
         address to,
         uint256 value,
         bytes memory data
     ) external onlyModule nonReentrant returns (bool) {
-        require(to != address(0), "Invalid destination address");
+        if (to == address(0)) revert InvalidDestinationAddress();
 
         // Security: Prevent modules from modifying module permissions
         // This prevents a compromised module from enabling/disabling other modules
         // Owner management functions ARE allowed for legitimate recovery scenarios
         if (to == address(this) && data.length >= 4) {
             bytes4 selector = bytes4(data);
-            require(
-                selector != this.enableModule.selector &&
-                selector != this.disableModule.selector,
-                "Module cannot modify module permissions"
-            );
+            if (selector == this.enableModule.selector || selector == this.disableModule.selector) {
+                revert ModuleCannotModifyModulePermissions();
+            }
         }
 
         (bool success, ) = to.call{value: value}(data);
@@ -619,7 +641,7 @@ contract MultisigWallet is Initializable, ReentrancyGuardUpgradeable {
      * @param value Amount
      * @param data Transaction data
      * @param _nonce Nonce value
-     * @return Transaction hash
+     * @return Unique bytes32 hash computed from wallet address, transaction parameters, nonce, and chain ID
      */
     function getTransactionHash(
         address to,

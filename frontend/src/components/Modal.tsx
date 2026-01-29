@@ -26,8 +26,8 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
   const sizeClasses = {
     sm: 'max-w-sm',
     md: 'max-w-md',
-    lg: 'max-w-lg',
-    xl: 'max-w-2xl',
+    lg: 'max-w-2xl',
+    xl: 'max-w-4xl',
   };
 
   return (
@@ -39,13 +39,13 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
       />
       
       {/* Modal container - offset by sidebar and topbar */}
-      <div 
-        className="fixed inset-0 z-50 overflow-y-auto pointer-events-none pl-64 pt-[7.5rem] pb-6"
+      <div
+        className="fixed inset-0 z-50 overflow-y-auto pointer-events-none pl-64 pt-[7.5rem] pb-12"
         onClick={onClose}
       >
-        <div className="flex min-h-[calc(100vh-7.5rem-1.5rem)] items-start justify-center p-5 pointer-events-none">
+        <div className="flex min-h-[calc(100vh-7.5rem-3rem)] items-start justify-center p-5 pointer-events-none">
           <div
-            className={`relative w-full ${sizeClasses[size]} vault-panel shadow-vault-outer border-2 border-dark-700 max-h-[calc(100vh-7.5rem-1.5rem-2rem)] flex flex-col pointer-events-auto`}
+            className={`relative w-full ${sizeClasses[size]} vault-panel shadow-vault-outer border-2 border-dark-700 max-h-[calc(100vh-7.5rem-6rem)] flex flex-col pointer-events-auto`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header - Fixed */}

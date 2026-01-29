@@ -20,7 +20,17 @@ contract DailyLimitModule {
         uint256 lastReset;
     }
 
+    // Custom errors (gas efficient)
+    error MustBeCalledByWallet();
+    error ModuleNotEnabled();
+    error NotAnOwner();
+    error InvalidDestination();
+    error DailyLimitNotSet();
+    error ExceedsDailyLimit();
+    error TransactionFailed();
+
     /// @notice Mapping from wallet address to its daily limit configuration
+    /// @dev Each wallet has independent limit tracking; automatically resets after 24 hours from lastReset
     mapping(address => DailyLimit) public dailyLimits;
 
     /// @notice Emitted when a daily limit is set or updated
@@ -48,11 +58,15 @@ contract DailyLimitModule {
      * @notice Set daily spending limit
      * @param wallet Multisig wallet address
      * @param limit Daily limit in wei
+     * @dev SECURITY: Must be called through multisig transaction (msg.sender == wallet)
+     *      This prevents a single owner from unilaterally setting limits
      */
     function setDailyLimit(address wallet, uint256 limit) external {
+        // SECURITY FIX (H-2): Require multisig approval by checking msg.sender == wallet
+        // Previously only required isOwner, allowing single owner bypass
+        if (msg.sender != wallet) revert MustBeCalledByWallet();
         MultisigWallet multisig = MultisigWallet(payable(wallet));
-        require(multisig.isOwner(msg.sender), "Not an owner");
-        require(multisig.modules(address(this)), "Module not enabled");
+        if (!multisig.modules(address(this))) revert ModuleNotEnabled();
 
         dailyLimits[wallet].limit = limit;
 
@@ -76,12 +90,12 @@ contract DailyLimitModule {
         uint256 value
     ) external {
         MultisigWallet multisig = MultisigWallet(payable(wallet));
-        require(multisig.isOwner(msg.sender), "Not an owner");
-        require(multisig.modules(address(this)), "Module not enabled");
-        require(to != address(0), "Invalid destination");
+        if (!multisig.isOwner(msg.sender)) revert NotAnOwner();
+        if (!multisig.modules(address(this))) revert ModuleNotEnabled();
+        if (to == address(0)) revert InvalidDestination();
 
         DailyLimit storage limit = dailyLimits[wallet];
-        require(limit.limit > 0, "Daily limit not set");
+        if (limit.limit == 0) revert DailyLimitNotSet();
 
         // Reset if 24 hours have passed
         if (block.timestamp >= limit.lastReset + 1 days) {
@@ -91,17 +105,14 @@ contract DailyLimitModule {
         }
 
         // Check if transaction is within limit
-        require(
-            limit.spent + value <= limit.limit,
-            "Exceeds daily limit"
-        );
+        if (limit.spent + value > limit.limit) revert ExceedsDailyLimit();
 
         // Update spent amount
         limit.spent += value;
 
         // Execute transaction through wallet
         bool success = multisig.execTransactionFromModule(to, value, "");
-        require(success, "Transaction failed");
+        if (!success) revert TransactionFailed();
 
         emit TransactionExecuted(
             wallet,
@@ -112,12 +123,16 @@ contract DailyLimitModule {
     }
 
     /**
-     * @notice Manually reset daily limit (owner only)
+     * @notice Manually reset daily limit
      * @param wallet Multisig wallet address
+     * @dev SECURITY: Must be called through multisig transaction (msg.sender == wallet)
+     *      This prevents a single owner from unilaterally resetting the limit
      */
     function resetDailyLimit(address wallet) external {
+        // SECURITY FIX (H-2): Require multisig approval by checking msg.sender == wallet
+        if (msg.sender != wallet) revert MustBeCalledByWallet();
         MultisigWallet multisig = MultisigWallet(payable(wallet));
-        require(multisig.isOwner(msg.sender), "Not an owner");
+        if (!multisig.modules(address(this))) revert ModuleNotEnabled();
 
         DailyLimit storage limit = dailyLimits[wallet];
         limit.spent = 0;

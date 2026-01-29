@@ -1,7 +1,7 @@
 import * as quais from 'quais';
-import type { Contract, Signer, Provider } from '../../types';
+import type { Provider } from '../../types';
 import { CONTRACT_ADDRESSES } from '../../config/contracts';
-import { BaseService } from '../core/BaseService';
+import { BaseModuleService } from './BaseModuleService';
 import { transactionBuilderService } from '../TransactionBuilderService';
 import {
   isUserRejection,
@@ -17,47 +17,39 @@ import DailyLimitModuleABI from '../../config/abi/DailyLimitModule.json';
 
 /**
  * Service for daily limit module operations
+ *
+ * IMPORTANT (H-2 Security Fix): Configuration functions (setDailyLimit, resetDailyLimit)
+ * now require multisig approval. Use proposeSetDailyLimit() and proposeResetDailyLimit()
+ * to create multisig proposals. Execution functions (executeBelowLimit) still work
+ * with single owner.
  */
-export class DailyLimitModuleService extends BaseService {
+export class DailyLimitModuleService extends BaseModuleService {
 
   constructor(provider?: Provider) {
-    super(provider);
+    super(provider, CONTRACT_ADDRESSES.DAILY_LIMIT_MODULE, DailyLimitModuleABI);
   }
 
   /**
-   * Get daily limit module contract instance
+   * Propose setting daily spending limit (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
    */
-  private getModuleContract(signerOrProvider?: Signer | Provider): Contract {
-    const abi = Array.isArray(DailyLimitModuleABI) ? DailyLimitModuleABI : (DailyLimitModuleABI as any).abi;
-    return new quais.Contract(
-      CONTRACT_ADDRESSES.DAILY_LIMIT_MODULE,
-      abi,
-      signerOrProvider || this.provider
-    ) as Contract;
+  async proposeSetDailyLimit(walletAddress: string, limit: bigint): Promise<string> {
+    return this.createModuleProposal(walletAddress, 'setDailyLimit', [walletAddress, limit]);
   }
 
   /**
-   * Set daily spending limit
+   * Propose resetting daily limit (requires multisig approval)
+   * @returns Transaction hash for the multisig proposal
    */
-  async setDailyLimit(walletAddress: string, limit: bigint): Promise<void> {
-    const signer = this.requireSigner();
-    const module = this.getModuleContract(signer);
+  async proposeResetDailyLimit(walletAddress: string): Promise<string> {
+    return this.createModuleProposal(walletAddress, 'resetDailyLimit', [walletAddress]);
+  }
 
-    await estimateGasOrThrow(
-      module.setDailyLimit,
-      [walletAddress, limit],
-      'set daily limit',
-      module
-    );
-
-    const { gasLimit } = await estimateGasWithBuffer(
-      module.setDailyLimit,
-      [walletAddress, limit],
-      GasPresets.standard
-    );
-
-    const tx = await module.setDailyLimit(walletAddress, limit, buildTxOptions(gasLimit));
-    await tx.wait();
+  /**
+   * @deprecated Use proposeSetDailyLimit() instead - direct calls now require multisig approval (H-2 fix)
+   */
+  async setDailyLimit(_walletAddress: string, _limit: bigint): Promise<void> {
+    this.throwDeprecationError('setDailyLimit', 'proposeSetDailyLimit');
   }
 
   /**
@@ -69,27 +61,10 @@ export class DailyLimitModuleService extends BaseService {
   }
 
   /**
-   * Reset daily limit (manually reset spent amount)
+   * @deprecated Use proposeResetDailyLimit() instead - direct calls now require multisig approval (H-2 fix)
    */
-  async resetDailyLimit(walletAddress: string): Promise<void> {
-    const signer = this.requireSigner();
-    const module = this.getModuleContract(signer);
-
-    await estimateGasOrThrow(
-      module.resetDailyLimit,
-      [walletAddress],
-      'reset daily limit',
-      module
-    );
-
-    const { gasLimit } = await estimateGasWithBuffer(
-      module.resetDailyLimit,
-      [walletAddress],
-      GasPresets.standard
-    );
-
-    const tx = await module.resetDailyLimit(walletAddress, buildTxOptions(gasLimit));
-    await tx.wait();
+  async resetDailyLimit(_walletAddress: string): Promise<void> {
+    this.throwDeprecationError('resetDailyLimit', 'proposeResetDailyLimit');
   }
 
   /**

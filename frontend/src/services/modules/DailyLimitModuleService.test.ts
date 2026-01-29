@@ -150,47 +150,19 @@ describe('DailyLimitModuleService', () => {
     });
   });
 
-  describe('setDailyLimit', () => {
-    beforeEach(() => {
-      service.setSigner(mockSigner);
-    });
-
-    it('should throw when signer not set', async () => {
-      service.setSigner(null);
-
-      await expect(service.setDailyLimit(VALID_WALLET, 1000000000000000000n)).rejects.toThrow(
-        'Signer not set'
-      );
-    });
-
-    it('should set daily limit', async () => {
-      const limit = 5000000000000000000n; // 5 QUAI
-
-      await service.setDailyLimit(VALID_WALLET, limit);
-
-      expect(mockModule.setDailyLimit).toHaveBeenCalledWith(
-        VALID_WALLET,
-        limit,
-        expect.any(Object)
-      );
+  describe('setDailyLimit (deprecated)', () => {
+    it('should throw deprecation error', async () => {
+      await expect(
+        service.setDailyLimit(VALID_WALLET, 1000000000000000000n)
+      ).rejects.toThrow('Direct setDailyLimit calls are no longer supported');
     });
   });
 
-  describe('resetDailyLimit', () => {
-    beforeEach(() => {
-      service.setSigner(mockSigner);
-    });
-
-    it('should throw when signer not set', async () => {
-      service.setSigner(null);
-
-      await expect(service.resetDailyLimit(VALID_WALLET)).rejects.toThrow('Signer not set');
-    });
-
-    it('should reset daily limit', async () => {
-      await service.resetDailyLimit(VALID_WALLET);
-
-      expect(mockModule.resetDailyLimit).toHaveBeenCalledWith(VALID_WALLET, expect.any(Object));
+  describe('resetDailyLimit (deprecated)', () => {
+    it('should throw deprecation error', async () => {
+      await expect(
+        service.resetDailyLimit(VALID_WALLET)
+      ).rejects.toThrow('Direct resetDailyLimit calls are no longer supported');
     });
   });
 

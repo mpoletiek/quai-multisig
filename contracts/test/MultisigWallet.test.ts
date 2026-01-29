@@ -82,11 +82,11 @@ describe("MultisigWallet", function () {
 
       await expect(
         factory.connect(owner1).createWallet(owners, 0, salt)
-      ).to.be.revertedWith("Invalid threshold");
+      ).to.be.revertedWithCustomError(wallet, "InvalidThreshold");
 
       await expect(
         factory.connect(owner1).createWallet(owners, 3, salt)
-      ).to.be.revertedWith("Invalid threshold");
+      ).to.be.revertedWithCustomError(wallet, "InvalidThreshold");
     });
 
     it("should reject empty owners array", async function () {
@@ -94,7 +94,7 @@ describe("MultisigWallet", function () {
 
       await expect(
         factory.connect(owner1).createWallet([], THRESHOLD, salt)
-      ).to.be.revertedWith("Owners required");
+      ).to.be.revertedWithCustomError(wallet, "OwnersRequired");
     });
   });
 
@@ -126,7 +126,7 @@ describe("MultisigWallet", function () {
 
       await expect(
         wallet.connect(nonOwner).proposeTransaction(to, value, data)
-      ).to.be.revertedWith("Not an owner");
+      ).to.be.revertedWithCustomError(wallet, "NotAnOwner");
     });
 
     it("should reject proposal to zero address", async function () {
@@ -135,7 +135,7 @@ describe("MultisigWallet", function () {
 
       await expect(
         wallet.connect(owner1).proposeTransaction(ethers.ZeroAddress, value, data)
-      ).to.be.revertedWith("Invalid destination address");
+      ).to.be.revertedWithCustomError(wallet, "InvalidDestinationAddress");
     });
 
     it("should create transaction with correct hash", async function () {
@@ -203,13 +203,13 @@ describe("MultisigWallet", function () {
 
       await expect(
         wallet.connect(owner2).approveTransaction(txHash)
-      ).to.be.revertedWith("Already approved");
+      ).to.be.revertedWithCustomError(wallet, "AlreadyApproved");
     });
 
     it("should reject approval from non-owner", async function () {
       await expect(
         wallet.connect(nonOwner).approveTransaction(txHash)
-      ).to.be.revertedWith("Not an owner");
+      ).to.be.revertedWithCustomError(wallet, "NotAnOwner");
     });
 
     it("should track approvals correctly", async function () {
@@ -274,7 +274,7 @@ describe("MultisigWallet", function () {
 
       await expect(
         wallet.connect(owner2).executeTransaction(txHash)
-      ).to.be.revertedWith("Not enough approvals");
+      ).to.be.revertedWithCustomError(wallet, "NotEnoughApprovals");
     });
 
     it("should prevent double execution", async function () {
@@ -285,7 +285,7 @@ describe("MultisigWallet", function () {
 
       await expect(
         wallet.connect(owner3).executeTransaction(txHash)
-      ).to.be.revertedWith("Transaction already executed");
+      ).to.be.revertedWithCustomError(wallet, "TransactionAlreadyExecuted");
     });
 
     it("should increment nonce on proposal (not execution)", async function () {
@@ -352,7 +352,7 @@ describe("MultisigWallet", function () {
     it("should reject revocation if not approved", async function () {
       await expect(
         wallet.connect(owner2).revokeApproval(txHash)
-      ).to.be.revertedWith("Not approved");
+      ).to.be.revertedWithCustomError(wallet, "NotApproved");
     });
 
     it("should reject revocation after execution", async function () {
@@ -366,7 +366,7 @@ describe("MultisigWallet", function () {
 
       await expect(
         wallet.connect(owner1).revokeApproval(txHash)
-      ).to.be.revertedWith("Transaction already executed");
+      ).to.be.revertedWithCustomError(wallet, "TransactionAlreadyExecuted");
     });
   });
 
@@ -426,13 +426,13 @@ describe("MultisigWallet", function () {
       // Try to execute - should fail because transaction is cancelled
       await expect(
         wallet.connect(owner3).executeTransaction(txHash)
-      ).to.be.revertedWith("Transaction already cancelled");
+      ).to.be.revertedWithCustomError(wallet, "TransactionAlreadyCancelled");
     });
 
     it("should reject cancellation from non-proposer before threshold", async function () {
       await expect(
         wallet.connect(owner2).cancelTransaction(txHash)
-      ).to.be.revertedWith("Not proposer and not enough approvals to cancel");
+      ).to.be.revertedWithCustomError(wallet, "NotProposerAndNotEnoughApprovalsToCancel");
     });
   });
 

@@ -127,90 +127,19 @@ describe('WhitelistModuleService', () => {
     });
   });
 
-  describe('addToWhitelist', () => {
-    beforeEach(() => {
-      service.setSigner(mockSigner);
-    });
-
-    it('should throw when signer not set', async () => {
-      service.setSigner(null);
-
+  describe('addToWhitelist (deprecated)', () => {
+    it('should throw deprecation error', async () => {
       await expect(
         service.addToWhitelist(VALID_WALLET, VALID_TARGET, 1000n)
-      ).rejects.toThrow('Signer not set');
-    });
-
-    it('should throw for invalid address', async () => {
-      await expect(service.addToWhitelist(VALID_WALLET, 'invalid', 1000n)).rejects.toThrow(
-        'Invalid address'
-      );
-    });
-
-    it('should add address to whitelist with limit', async () => {
-      await service.addToWhitelist(VALID_WALLET, VALID_TARGET, 1000000000000000000n);
-
-      expect(mockModule.addToWhitelist).toHaveBeenCalledWith(
-        VALID_WALLET,
-        VALID_TARGET,
-        1000000000000000000n,
-        expect.any(Object)
-      );
-    });
-
-    it('should throw on user rejection', async () => {
-      mockModule.addToWhitelist.mockRejectedValue({ code: 'ACTION_REJECTED' });
-
-      await expect(
-        service.addToWhitelist(VALID_WALLET, VALID_TARGET, 1000n)
-      ).rejects.toThrow('Transaction was rejected by user');
-    });
-
-    it('should throw on reverted transaction', async () => {
-      mockModule.addToWhitelist.mockResolvedValue({
-        wait: vi.fn().mockResolvedValue({ status: 0 }),
-      });
-
-      await expect(
-        service.addToWhitelist(VALID_WALLET, VALID_TARGET, 1000n)
-      ).rejects.toThrow('reverted');
+      ).rejects.toThrow('Direct addToWhitelist calls are no longer supported');
     });
   });
 
-  describe('removeFromWhitelist', () => {
-    beforeEach(() => {
-      service.setSigner(mockSigner);
-    });
-
-    it('should throw when signer not set', async () => {
-      service.setSigner(null);
-
+  describe('removeFromWhitelist (deprecated)', () => {
+    it('should throw deprecation error', async () => {
       await expect(
         service.removeFromWhitelist(VALID_WALLET, VALID_TARGET)
-      ).rejects.toThrow('Signer not set');
-    });
-
-    it('should throw for invalid address', async () => {
-      await expect(service.removeFromWhitelist(VALID_WALLET, 'invalid')).rejects.toThrow(
-        'Invalid address'
-      );
-    });
-
-    it('should remove address from whitelist', async () => {
-      await service.removeFromWhitelist(VALID_WALLET, VALID_TARGET);
-
-      expect(mockModule.removeFromWhitelist).toHaveBeenCalledWith(
-        VALID_WALLET,
-        VALID_TARGET,
-        expect.any(Object)
-      );
-    });
-
-    it('should throw on user rejection', async () => {
-      mockModule.removeFromWhitelist.mockRejectedValue({ code: 'ACTION_REJECTED' });
-
-      await expect(
-        service.removeFromWhitelist(VALID_WALLET, VALID_TARGET)
-      ).rejects.toThrow('Transaction was rejected by user');
+      ).rejects.toThrow('Direct removeFromWhitelist calls are no longer supported');
     });
   });
 
