@@ -17,7 +17,8 @@
       "Bash(xargs:*)",
       "Bash(grep:*)",
       "Bash(cloc:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(npm run deploy:cyprus1:*)"
     ]
   }
 }
